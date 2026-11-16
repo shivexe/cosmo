@@ -1,0 +1,17 @@
+Hey Cosmo, what is on my plate today. Open the project folder and show me the latest changes. Cosmo, start a new session and read me the summary from yesterday. Please check the pull request and tell me what Rex said. Run the build, and if it fails, show me the first error.
+
+I mostly work with Claude Code and Codex. For the backend I use Strapi, Postgres and Redis, and the services run on Cloud Run. Logs go through Datadog, and tickets live in Linear. When I review a pull request I check the migration, the endpoint, and the worktree it was built in. Sometimes the cache is stale, so I clear it and run the job again.
+
+For this project I want a small speech model that runs on my Mac. The candidates are Whisper, Moonshine and Parakeet. I will fine tune one with LoRA on my own recordings, using MLX. The wake word is trained with openWakeWord. For the voice I will start with Kokoro, and maybe try Sarvam later for Hinglish.
+
+The meeting is at three thirty on Friday, the twenty second of November. It should take about forty five minutes. Please remind me twenty minutes before. The file is about six hundred and eighty megabytes, and the server has sixteen gigabytes of memory. Type npm run develop, then press enter. The branch is called speech lab, and the commit message should be short.
+
+Hey, thanks for sending that over. I looked at it this morning and it mostly looks fine. One thing I am not sure about is the second section, where the numbers do not add up. Can we talk about it after lunch. I will be free around two. If anything changes, just message me and I will move things around. Also, please do not forget to send the invoice before the end of the month.
+
+My day usually starts with checking messages and looking at what broke overnight. Then I pick one task, open the code, and work on it until it is done. Between tasks I review pull requests, answer questions, and write short updates. When something is unclear, I ask for the exact error, the exact request, and the time it happened. I like to keep the changes small, so they are easy to review and easy to undo. At the end of the day I write down what is finished, what is blocked, and what comes next, so tomorrow starts with a clear list.
+
+Let me think about this for a second. The simplest fix is usually the best one, so I would rather delete the extra check than add another layer on top. If that breaks something, we can roll it back. Honestly, I just want it to work, be fast, and not drain the battery. It should listen quietly in the background, wake up when I call it, and do what I ask without making a fuss.
+
+Cosmo, cosmic, cosmos and cosmetic are all different words, but they sound close. Say them one after another. Cosmo. Cosmic. Cosmos. Cosmetic. Hey Cosmo. Okay Cosmo. Cosmo, stop.
+
+That is the end of the reading. If this recording sounds clear, we will use it as the starting point for training.

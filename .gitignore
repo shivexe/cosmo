@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+lab/data/wispr/
+lab/baseline/me-baseline.wav
+lab/baseline/results/
+lab/finetune/runs/
+.archify/
+tickets/
