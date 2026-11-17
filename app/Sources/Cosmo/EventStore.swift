@@ -36,7 +36,6 @@ final class EventStore {
 
     var runningWorkers: [Worker] { workers.filter(\.running) }
     var doneWorkers: [Worker] { workers.filter { !$0.running }.reversed() }
-    var problems: [ActivityItem] { activity.filter { $0.kind == .problem } }
 
     var headline: String {
         if let approval { return "Should I \(approval)?" }
@@ -128,6 +127,7 @@ final class EventStore {
         switch e.state {
         case "ready":
             state = .idle
+            starting = false
             dictation = .off
             missingPermission = false
             approval = nil
@@ -193,7 +193,7 @@ final class EventStore {
         case "permission":
             missingPermission = true
         case "dictating":
-            dictation = .listening
+            dictation = d.text == "locked" ? .locked : .listening
         case "dictation_working":
             dictation = .working
         case "dictation_done":
@@ -257,10 +257,10 @@ final class EventStore {
             state = .offline
             approval = nil
             for i in workers.indices where workers[i].running { workers[i].status = "stopped" }
-        } else if alive && state == .offline {
+        } else if alive && state == .offline && !starting {
             state = .idle
         }
-        if starting && (alive || launched?.isRunning != true) { starting = false }
+        if starting && !alive && launched?.isRunning != true { starting = false }
         if !alive, let p = launched, !p.isRunning {
             launched = nil
             crashes = crashes.filter { $0 > Date().addingTimeInterval(-600) } + [Date()]
@@ -275,11 +275,20 @@ final class EventStore {
 
     @ObservationIgnored private var crashes: [Date] = []
 
+    func hostsChanged(_ dict: [String: Any]) {
+        hosts = dict.keys.sorted().map { name in
+            let h = dict[name] as? [String: Any] ?? [:]
+            let previous = hosts.first { $0.name == name }
+            return HostRow(name: name, label: h["label"] as? String ?? name, kind: h["kind"] as? String ?? "ssh",
+                           online: previous?.online ?? false, checked: previous?.checked ?? Date().timeIntervalSince1970)
+        }
+        if state != .offline { restartCosmo() }
+    }
+
     func restartCosmo() {
         let url = Self.home.appendingPathComponent("cosmo.pid")
-        if let pid = (try? String(contentsOf: url, encoding: .utf8)).flatMap({ Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }) {
-            kill(pid, SIGTERM)
-        }
+        let pid = (try? String(contentsOf: url, encoding: .utf8)).flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        if let pid { kill(pid, SIGTERM) }
         let old = launched
         if old?.isRunning == true { old?.terminate() }
         launched = nil
@@ -289,6 +298,11 @@ final class EventStore {
                 try? await Task.sleep(for: .milliseconds(250))
                 checkAlive()
                 if state == .offline && old?.isRunning != true { break }
+            }
+            if state != .offline, let old, old.isRunning {
+                kill(old.processIdentifier, SIGKILL)
+                try? await Task.sleep(for: .milliseconds(500))
+                checkAlive()
             }
             startCosmo()
         }

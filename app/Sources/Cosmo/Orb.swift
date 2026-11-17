@@ -27,7 +27,7 @@ struct Orb: View {
     @State private var onScreen = true
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: nil, paused: !onScreen || state == .idle || state == .offline)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !onScreen || state == .idle || state == .offline)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             let angle = Angle.degrees((t / spinSeconds).truncatingRemainder(dividingBy: 1) * 360)
             let pulse = 0.5 + 0.5 * sin(t * 2 * .pi / beat)

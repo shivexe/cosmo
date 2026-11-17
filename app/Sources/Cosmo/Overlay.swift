@@ -88,7 +88,7 @@ struct OverlayCapsule: View {
 
 struct VoiceBars: View {
     var body: some View {
-        TimelineView(.animation) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 3) {
                 ForEach(0..<4, id: \.self) { i in
@@ -138,11 +138,17 @@ struct DictationBubble: View {
         ZStack {
             if store.dictation != .off {
                 VStack(spacing: 6) {
-                    Orb(state: store.dictation == .listening ? .listening : .thinking, size: 30, halo: false)
-                    if store.dictation == .listening {
-                        VoiceBars().scaleEffect(0.7)
-                    } else {
+                    Orb(state: store.dictation == .working ? .thinking : .listening, size: 30, halo: false)
+                        .overlay(alignment: .bottomTrailing) {
+                            if store.dictation == .locked {
+                                Image(systemName: "lock.fill").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                                    .padding(3).background(Circle().fill(Color(hex: 0x4C7DFF))).offset(x: 4, y: 4)
+                            }
+                        }
+                    if store.dictation == .working {
                         ProgressView().controlSize(.small)
+                    } else {
+                        VoiceBars().scaleEffect(0.7)
                     }
                 }
                 .frame(width: 64, height: 76)

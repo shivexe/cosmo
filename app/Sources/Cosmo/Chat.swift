@@ -87,6 +87,7 @@ final class Transcript {
             guard let row = try? JSONSerialization.jsonObject(with: Data(raw)) as? [String: Any],
                   let type = row["type"] as? String, type == "user" || type == "assistant",
                   row["isMeta"] as? Bool != true, row["isSidechain"] as? Bool != true,
+                  row["isCompactSummary"] as? Bool != true, row["isVisibleInTranscriptOnly"] as? Bool != true,
                   let message = row["message"] as? [String: Any] else { continue }
             let time = (row["timestamp"] as? String).flatMap { iso.date(from: $0) }
             var text: [String] = []
@@ -163,7 +164,6 @@ struct ChatView: View {
                 composer.padding(.bottom, 16)
             }
         }
-        .onAppear { focused = true }
     }
 
     private var composer: some View {

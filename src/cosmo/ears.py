@@ -42,7 +42,7 @@ class Ears:
         self.reverse = queue.Queue()
         self.refs = self.fed = 0
         self.captured = self.cleaned = 0
-        self.recent = deque(maxlen=RATE // FRAME)
+        self.recent = deque(maxlen=2 * RATE // FRAME)
         self.recent_lock = threading.Lock()
         self.on_start = lambda: None
         self.on_utterance = lambda audio: None
@@ -183,9 +183,13 @@ class Ears:
         self.cleaned += 1
         return clean
 
-    def last_second(self):
+    def last(self, seconds):
         with self.recent_lock:
-            return np.concatenate(self.recent) if self.recent else np.zeros(0, dtype=np.float32)
+            frames = list(self.recent)[-int(seconds * RATE / FRAME):]
+        return np.concatenate(frames) if frames else np.zeros(0, dtype=np.float32)
+
+    def last_second(self):
+        return self.last(1.0)
 
     def _listen(self):
         vad = VADIterator(self.model, threshold=0.5, sampling_rate=RATE, min_silence_duration_ms=self.end_ms)

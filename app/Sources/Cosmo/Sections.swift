@@ -30,18 +30,6 @@ struct Card<Content: View>: View {
     }
 }
 
-struct PageHeader: View {
-    var title: String
-    var subtitle: String
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 28, weight: .semibold)).tracking(-0.5)
-            Text(subtitle).foregroundStyle(.secondary)
-        }
-        .padding(.bottom, 6)
-    }
-}
-
 struct Tile: View {
     var glyph: String
     var colors: [Color]
@@ -57,33 +45,9 @@ struct Tile: View {
 }
 
 enum Tiles {
-    static let worker = [Color(hex: 0x4C7DFF), Color(hex: 0x2B4BB8)]
-    static let done = [Color(hex: 0x3E8E5E), Color(hex: 0x24573A)]
     static let failed = [Color(hex: 0xD9534F), Color(hex: 0x8F2F2C)]
     static let claude = [Color(hex: 0xD97757), Color(hex: 0xA8553A)]
     static let amber = [Color(hex: 0xF7B955), Color(hex: 0xC9862B)]
-    static let voice = [Color(hex: 0x8B6CFF), Color(hex: 0x5B3FD0)]
-    static let grey = [Color(hex: 0x4A5568), Color(hex: 0x2D3748)]
-}
-
-struct Row<Trailing: View>: View {
-    var glyph: String
-    var colors: [Color]
-    var title: String
-    var subtitle: String
-    @ViewBuilder var trailing: Trailing
-    var body: some View {
-        HStack(spacing: 14) {
-            Tile(glyph: glyph, colors: colors)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).fontWeight(.semibold).lineLimit(2)
-                if !subtitle.isEmpty { Text(subtitle).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(2) }
-            }
-            Spacer(minLength: 12)
-            trailing
-        }
-        .padding(12)
-    }
 }
 
 struct EmptyNote: View {
@@ -176,65 +140,38 @@ struct PermissionBanner: View {
     }
 }
 
-// MARK: Inbox
-
-struct InboxView: View {
-    var store: EventStore
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            PageHeader(title: "Inbox", subtitle: "Only what needs you")
-            Card {
-                if let approval = store.approval {
-                    Row(glyph: "hand.raised.fill", colors: Tiles.amber, title: "Should I \(approval)?", subtitle: "Waiting for your answer") {
-                        HStack(spacing: 8) {
-                            Button("Allow") { store.approve(true) }.buttonStyle(.glassProminent).tint(Color(hex: 0xF7B955))
-                            Button("Deny") { store.approve(false) }.buttonStyle(.glass)
-                        }
-                    }
-                }
-                ForEach(store.workers.filter(\.failed).reversed()) { w in
-                    Row(glyph: "exclamationmark.triangle.fill", colors: Tiles.failed, title: w.title, subtitle: w.summary.isEmpty ? "Failed" : w.summary) {
-                        Button("Retry") { store.ask("Retry this: \(w.title)") }.buttonStyle(.glass)
-                    }
-                }
-                if store.approval == nil && !store.workers.contains(where: \.failed) {
-                    EmptyNote(icon: "checkmark.seal", text: "Nothing needs you right now")
-                }
-            }
-        }
-    }
-}
-
 // MARK: Activity
 
 struct ActivityView: View {
     var store: EventStore
     @State private var filter: ActivityItem.Kind?
+
+    private var items: [ActivityItem] { store.activity.filter { filter == nil || $0.kind == filter }.suffix(300).reversed() }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .bottom) {
-                PageHeader(title: "Activity", subtitle: "Everything Cosmo did")
-                Spacer()
+        Group {
+            if items.isEmpty {
+                ContentUnavailableView("No activity yet", systemImage: "clock", description: Text("What Cosmo hears, does and runs shows up here."))
+            } else {
+                Table(items) {
+                    TableColumn("Time") { Text(clock($0.time)).monospacedDigit().foregroundStyle(.secondary) }.width(56)
+                    TableColumn("Type") { Text($0.kind.rawValue).foregroundStyle(.secondary) }.width(110)
+                    TableColumn("Event") { Text($0.text).lineLimit(2) }
+                }
+            }
+        }
+        .toolbar {
+            Menu {
                 Picker("Show", selection: $filter) {
-                    Text("All").tag(ActivityItem.Kind?.none)
+                    Text("Everything").tag(ActivityItem.Kind?.none)
                     ForEach(ActivityItem.Kind.allCases, id: \.self) { Text($0.rawValue).tag(Optional($0)) }
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 520)
+                .pickerStyle(.inline)
+            } label: {
+                Label(filter?.rawValue ?? "Everything", systemImage: "line.3.horizontal.decrease.circle")
+                    .labelStyle(.titleAndIcon)
             }
-            Card {
-                let items = store.activity.filter { filter == nil || $0.kind == filter }.suffix(200).reversed()
-                if items.isEmpty { EmptyNote(icon: "clock", text: "No activity yet") }
-                ForEach(Array(items)) { item in
-                    HStack(spacing: 14) {
-                        Text(clock(item.time)).font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary).frame(width: 44, alignment: .leading)
-                        Text(item.kind.rawValue).font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 100, alignment: .leading)
-                        Text(item.text).lineLimit(2)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 16).padding(.vertical, 9)
-                }
-            }
+            .help("Filter the activity")
         }
     }
 }
@@ -244,52 +181,55 @@ struct ActivityView: View {
 struct WorkersView: View {
     var store: EventStore
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            PageHeader(title: "Workers", subtitle: "Background jobs Cosmo started for you")
-            Text("Running · \(store.runningWorkers.count)").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-            Card {
-                if store.runningWorkers.isEmpty { EmptyNote(icon: "checkmark.circle", text: "Nothing running") }
-                ForEach(store.runningWorkers) { w in WorkerRow(worker: w) }
+        if store.workers.isEmpty {
+            ContentUnavailableView("No workers yet", systemImage: "square.stack.3d.up", description: Text("When you ask Cosmo to do something, it starts a worker here."))
+        } else {
+            List {
+                if !store.runningWorkers.isEmpty {
+                    Section("Running") { ForEach(store.runningWorkers) { WorkerRow(worker: $0) } }
+                }
+                Section("Finished") {
+                    ForEach(store.doneWorkers.prefix(50)) { WorkerRow(worker: $0) }
+                }
             }
-            Text("Done · \(store.doneWorkers.count)").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-            Card {
-                if store.doneWorkers.isEmpty { EmptyNote(icon: "tray", text: "No finished workers yet") }
-                ForEach(store.doneWorkers.prefix(50)) { w in WorkerRow(worker: w) }
-            }
+            .listStyle(.inset)
         }
     }
 }
 
 struct WorkerRow: View {
     var worker: Worker
-    @State private var open = false
+    private var icon: (String, Color) {
+        if worker.running { return ("circle.dotted", .accentColor) }
+        if worker.failed { return ("exclamationmark.triangle.fill", .red) }
+        if worker.status == "stopped" { return ("stop.circle", .secondary) }
+        return ("checkmark.circle.fill", .green)
+    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button { open.toggle() } label: {
-                Row(glyph: worker.running ? "gearshape.2.fill" : worker.failed ? "exclamationmark.triangle.fill" : "checkmark",
-                    colors: worker.running ? Tiles.worker : worker.failed ? Tiles.failed : Tiles.done,
-                    title: worker.title, subtitle: worker.lastStep) {
-                    Text(elapsed(worker.started, worker.ended ?? Date())).font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
-                    Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 11)).foregroundStyle(.tertiary)
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(worker.steps.enumerated()), id: \.offset) { _, step in
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(clock(step.0)).monospacedDigit().foregroundStyle(.tertiary)
+                        Text(step.1).foregroundStyle(.secondary)
+                    }
+                    .font(.callout)
                 }
-                .contentShape(Rectangle())
+                if !worker.summary.isEmpty { Text(worker.summary).textSelection(.enabled).padding(.top, 4) }
             }
-            .buttonStyle(.plain)
-            if open {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(worker.steps.enumerated()), id: \.offset) { _, step in
-                        HStack(spacing: 12) {
-                            Text(clock(step.0)).font(.system(size: 11.5)).monospacedDigit().foregroundStyle(.tertiary)
-                            Text(step.1).font(.system(size: 12.5)).foregroundStyle(.secondary)
-                        }
-                    }
-                    if !worker.summary.isEmpty {
-                        Text(worker.summary).font(.system(size: 12.5)).padding(.top, 4)
-                    }
+            .padding(.vertical, 4)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: icon.0).foregroundStyle(icon.1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(worker.title).lineLimit(1)
+                    Text(plain(worker.lastStep)).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                 }
-                .padding(.leading, 62).padding(.bottom, 14).padding(.trailing, 14)
+                Spacer()
+                Text(elapsed(worker.started, worker.ended ?? Date())).monospacedDigit().foregroundStyle(.secondary)
             }
         }
+        .padding(.vertical, 3)
     }
 }
 
@@ -297,30 +237,127 @@ struct WorkerRow: View {
 
 struct DevicesView: View {
     var store: EventStore
+    @State private var config = ConfigFile()
+    @State private var editing: HostConfig?
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            PageHeader(title: "Devices", subtitle: "Where Cosmo can work")
-            Card {
-                Row(glyph: "laptopcomputer", colors: Tiles.worker, title: "This Mac",
-                    subtitle: store.state == .offline ? "Cosmo isn’t running" : "Cosmo is running · \(store.state.title.lowercased())") {
-                    Text(store.state == .offline ? "Offline" : "Online").font(.system(size: 12)).foregroundStyle(.secondary)
-                }
-            }
-            Card {
-                if store.hosts.isEmpty { EmptyNote(icon: "server.rack", text: "Checking your other machines…") }
-                ForEach(store.hosts) { h in
-                    Row(glyph: h.kind == "adb" ? "iphone.gen3" : h.name == "windows" ? "pc" : "server.rack",
-                        colors: h.online ? Tiles.worker : Tiles.grey, title: h.label,
-                        subtitle: h.online ? "Cosmo can run commands here" : h.kind == "adb" ? "Not connected over adb" : "Not reachable right now") {
-                        VStack(alignment: .trailing, spacing: 3) {
-                            Text(h.online ? "Online" : "Offline").font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(h.online ? Color(hex: 0xA9DBFF) : .secondary)
-                            Text("checked \(clock(Date(timeIntervalSince1970: h.checked)))").font(.system(size: 11)).foregroundStyle(.tertiary)
+        Form {
+            Section {
+                LabeledContent {
+                    status(store.state != .offline)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("This Mac")
+                            Text(store.state == .offline ? "Cosmo isn’t running" : "Cosmo runs here").font(.callout).foregroundStyle(.secondary)
                         }
+                    } icon: { icon("laptopcomputer") }
+                }
+                if store.hosts.isEmpty {
+                    Text("No other machines. Click + to add a server, laptop or phone.").foregroundStyle(.secondary)
+                }
+                ForEach(store.hosts) { h in
+                    LabeledContent {
+                        status(h.online)
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(h.label)
+                                Text(h.online ? "Cosmo can run commands here" : h.kind == "adb" ? "Not connected over adb" : "Not reachable")
+                                    .font(.callout).foregroundStyle(.secondary)
+                            }
+                        } icon: { icon(h.kind == "adb" ? "iphone" : "server.rack") }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { editing = host(h.name) }
+                    .contextMenu {
+                        Button("Edit…") { editing = host(h.name) }
+                        Button("Remove", role: .destructive) { remove(h.name) }
                     }
                 }
+            } header: {
+                Text("Machines")
+            } footer: {
+                Text("Cosmo checks each machine every minute. Double-click one to edit it, or click + to add one.").foregroundStyle(.secondary)
             }
         }
+        .formStyle(.grouped)
+        .toolbar {
+            Button { editing = HostConfig(name: "", label: "", kind: "ssh", target: "", shell: "bash") } label: { Label("Add Machine", systemImage: "plus") }
+                .help("Add a machine")
+        }
+        .sheet(item: $editing) { h in HostEditor(host: h, config: config) }
+    }
+
+    private func status(_ online: Bool) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(online ? Color.green : Color.secondary).frame(width: 7, height: 7)
+            Text(online ? "Online" : "Offline").foregroundStyle(.secondary)
+        }
+    }
+
+    private func icon(_ name: String) -> some View {
+        Image(systemName: name).frame(width: 20)
+    }
+
+    private func host(_ name: String) -> HostConfig? {
+        config.load()
+        guard let h = (config.values["hosts"] as? [String: [String: Any]])?[name] else { return nil }
+        return HostConfig(name: name, label: h["label"] as? String ?? name, kind: h["kind"] as? String ?? "ssh",
+                          target: h["target"] as? String ?? "", shell: h["shell"] as? String ?? "")
+    }
+
+    private func remove(_ name: String) {
+        config.load()
+        var dict = config.values["hosts"] as? [String: Any] ?? [:]
+        dict.removeValue(forKey: name)
+        config.set("hosts", dict)
+        AppDelegate.store.hostsChanged(dict)
+    }
+}
+
+struct HostEditor: View {
+    @State var host: HostConfig
+    var config: ConfigFile
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Form {
+            TextField("Name", text: $host.label, prompt: Text("Linux server"))
+            Picker("Type", selection: $host.kind) {
+                Text("SSH").tag("ssh")
+                Text("Android over adb").tag("adb")
+            }
+            TextField(host.kind == "adb" ? "Serial" : "SSH host", text: $host.target,
+                      prompt: Text(host.kind == "adb" ? "Optional, from adb devices" : "user@address or a ~/.ssh/config name"))
+            if host.kind == "ssh" {
+                TextField("Shell", text: $host.shell, prompt: Text("bash"))
+            }
+        }
+        .formStyle(.grouped)
+        .fitsContent()
+        .frame(width: 440)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") { save(); dismiss() }.disabled(host.label.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    private func save() {
+        config.load()
+        var dict = config.values["hosts"] as? [String: Any] ?? [:]
+        var name = host.name
+        if name.isEmpty {
+            name = host.label.lowercased().replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
+            while dict[name] != nil { name += "-2" }
+        }
+        var entry: [String: Any] = ["label": host.label, "kind": host.kind, "target": host.target]
+        if host.kind == "ssh" { entry["shell"] = host.shell.isEmpty ? "bash" : host.shell }
+        dict[name] = entry
+        config.set("hosts", dict)
+        AppDelegate.store.hostsChanged(dict)
     }
 }
 
@@ -335,27 +372,21 @@ struct SessionsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Claude sessions").font(.system(size: 20, weight: .semibold)).padding(.horizontal, 10).padding(.bottom, 8)
-                    if store.sessions.isEmpty { EmptyNote(icon: "terminal", text: "No live sessions, or Cosmo isn’t running") }
-                    ForEach(store.sessions) { s in
-                        Button { selected = s.id } label: { SessionItem(session: s, selected: s.id == selected) }
-                            .buttonStyle(.plain)
-                    }
-                }
-                .padding(14)
+            List(store.sessions, selection: $selected) { s in
+                SessionItem(session: s).tag(s.id)
             }
-            .frame(width: 300)
-            Divider().opacity(0.4)
+            .listStyle(.inset)
+            .overlay { if store.sessions.isEmpty { ContentUnavailableView("No live sessions", systemImage: "terminal") } }
+            .frame(width: 280)
+            Divider().opacity(0.3)
             Group {
                 if let s = current {
                     VStack(spacing: 0) {
                         HStack(spacing: 10) {
-                            Tile(glyph: "terminal.fill", colors: Tiles.claude, size: 26)
+                            Image(systemName: "terminal").font(.title3).foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(s.name).fontWeight(.semibold).lineLimit(1)
-                                Text(s.folder).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
+                                Text(URL(fileURLWithPath: s.folder).lastPathComponent).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
                             }
                             Spacer()
                             Text(s.status.capitalized).font(.system(size: 12, weight: .medium))
@@ -374,7 +405,7 @@ struct SessionsView: View {
                         }
                     }
                 } else {
-                    EmptyNote(icon: "sidebar.left", text: "Pick a session to read its conversation").frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ContentUnavailableView("Pick a session", systemImage: "bubble.left.and.bubble.right", description: Text("Its conversation shows here."))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -389,22 +420,24 @@ struct SessionsView: View {
 
 struct SessionItem: View {
     var session: SessionRow
-    var selected: Bool
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Circle().fill(session.status == "busy" ? Color(hex: 0x7CC4FF) : Color.gray.opacity(0.6))
-                .frame(width: 7, height: 7).padding(.top, 6)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(session.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Text(plain(session.last.isEmpty ? session.topic : session.last)).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                if session.status == "busy" { Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(Color.accentColor) }
+                Text(session.name).fontWeight(.semibold).lineLimit(1)
+                Spacer(minLength: 6)
+                Text(ago(session.updated / 1000)).font(.callout).foregroundStyle(.tertiary)
             }
-            Spacer(minLength: 0)
+            Text(plain(session.last.isEmpty ? session.topic : session.last)).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+            Text(URL(fileURLWithPath: session.folder).lastPathComponent).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(selected ? Color.white.opacity(0.1) : .clear))
-        .contentShape(Rectangle())
+        .padding(.vertical, 4)
     }
+}
+
+func ago(_ t: Double) -> String {
+    let s = Int(max(0, Date().timeIntervalSince1970 - t))
+    return s < 60 ? "now" : s < 3600 ? "\(s / 60)m" : s < 86400 ? "\(s / 3600)h" : "\(s / 86400)d"
 }
 
 func plain(_ s: String) -> String {
@@ -415,53 +448,224 @@ func plain(_ s: String) -> String {
 
 struct DictationView: View {
     var store: EventStore
-    @State private var dictionary = ""
-    @State private var saved = ""
-    private static let url = EventStore.home.appendingPathComponent("dictionary.txt")
+    @State private var config = ConfigFile()
+    @State private var words: [String] = []
+    @State private var fixes: [(said: String, meant: String)] = []
+    @State private var newWord = ""
+    @State private var newSaid = ""
+    @State private var newMeant = ""
+    @State private var editing: UUID?
+    @State private var draft = ""
+    @State private var learned = ""
+    @State private var kept: [String] = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            PageHeader(title: "Dictation", subtitle: "Hold \(KeyNames.label(ConfigFile().string("dictation_key", "cmd_r"))) and talk. Release to type it into whatever app you’re in.")
-            Text("Recent · \(store.dictations.count)").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-            Card {
-                if store.dictations.isEmpty { EmptyNote(icon: "text.cursor", text: "Nothing dictated yet") }
-                ForEach(store.dictations.suffix(50).reversed()) { line in
-                    HStack(alignment: .top, spacing: 14) {
-                        Text(clock(line.time)).font(.system(size: 12)).monospacedDigit().foregroundStyle(.tertiary).frame(width: 44, alignment: .leading)
-                        Text(line.text).textSelection(.enabled)
-                        Spacer()
-                        Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(line.text, forType: .string) } label: {
-                            Image(systemName: "doc.on.doc")
+        Form {
+            Section {
+                KeyRecorder(title: "Shortcut", key: "dictation_key", fallback: "cmd_r", config: config)
+                Toggle("Double-tap to keep it on", isOn: Binding(
+                    get: { config.values["dictation_double_tap"] as? Bool ?? true },
+                    set: { config.set("dictation_double_tap", $0); AppDelegate.store.restartCosmo() }))
+            } footer: {
+                Text("Hold the shortcut and talk, then let go. Or double-tap it, talk, and tap once to stop. Cosmo types into whatever app you’re in.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                if !words.isEmpty {
+                    FlowLayout(spacing: 6) {
+                        ForEach(words, id: \.self) { w in
+                            HStack(spacing: 4) {
+                                Text(w)
+                                Button { words.removeAll { $0 == w }; saveWords() } label: { Image(systemName: "xmark.circle.fill") }
+                                    .buttonStyle(.borderless).foregroundStyle(.tertiary).help("Remove \(w)")
+                            }
+                            .padding(.leading, 9).padding(.trailing, 5).padding(.vertical, 3)
+                            .background(Capsule().fill(.quaternary))
                         }
-                        .buttonStyle(.plain).foregroundStyle(.secondary).help("Copy")
                     }
-                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .padding(.vertical, 4)
                 }
+                TextField("Add a word", text: $newWord, prompt: Text("A name, tool or term")).onSubmit(addWord)
+            } header: {
+                Text("Words you use")
+            } footer: {
+                Text("Cosmo hints these to the speech model so it spells them right.").foregroundStyle(.secondary)
             }
-            HStack {
-                Text("Dictionary").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                Spacer()
-                Text("One per line: what Whisper writes => what you want").font(.system(size: 11.5)).foregroundStyle(.tertiary)
-                Button("Save") { save() }.buttonStyle(.glass).disabled(dictionary == saved)
+
+            Section {
+                ForEach(Array(fixes.enumerated()), id: \.offset) { i, f in
+                    LabeledContent {
+                        HStack {
+                            Text(f.meant)
+                            Button { fixes.remove(at: i); saveFixes() } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.borderless).help("Remove")
+                        }
+                    } label: {
+                        Text(f.said).foregroundStyle(.secondary)
+                    }
+                }
+                HStack {
+                    TextField("Heard", text: $newSaid, prompt: Text("Heard")).labelsHidden()
+                    Image(systemName: "arrow.right").foregroundStyle(.tertiary)
+                    TextField("Meant", text: $newMeant, prompt: Text("Meant")).labelsHidden().onSubmit(addFix)
+                    Button("Add", action: addFix)
+                        .disabled(newSaid.trimmingCharacters(in: .whitespaces).isEmpty || newMeant.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            } header: {
+                Text("Corrections")
+            } footer: {
+                Text("When the speech model writes the left side, Cosmo types the right side.").foregroundStyle(.secondary)
             }
-            Card {
-                TextEditor(text: $dictionary)
-                    .font(.system(size: 13, design: .monospaced))
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 180)
-                    .padding(10)
+
+            Section {
+                if store.dictations.isEmpty { Text("Nothing dictated yet.").foregroundStyle(.secondary) }
+                ForEach(store.dictations.suffix(10).reversed()) { line in
+                    DictationRow(line: line, editing: editing == line.id, draft: $draft,
+                                 onFix: { editing = line.id; draft = line.text },
+                                 onCancel: { editing = nil },
+                                 onLearn: { learn(from: line.text) })
+                }
+            } header: {
+                Text("Recent")
+            } footer: {
+                Text(learned.isEmpty ? "Hover a line and click Fix to teach Cosmo what you said." : learned).foregroundStyle(.secondary)
             }
         }
+        .formStyle(.grouped)
         .onAppear(perform: load)
     }
 
+    private static let wordsURL = EventStore.home.appendingPathComponent("words.txt")
+    private static let fixesURL = EventStore.home.appendingPathComponent("dictionary.txt")
+
     private func load() {
-        dictionary = (try? String(contentsOf: Self.url, encoding: .utf8)) ?? "# one per line: what Whisper writes => what you want\n"
-        saved = dictionary
+        var seen = Set<String>()
+        words = ((try? String(contentsOf: Self.wordsURL, encoding: .utf8)) ?? "").split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+        fixes = []
+        kept = []
+        for raw in ((try? String(contentsOf: Self.fixesURL, encoding: .utf8)) ?? "").components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("# one per line") { continue }
+            if !line.hasPrefix("#"), let range = line.range(of: "=>") ?? line.range(of: "\t") {
+                let said = line[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
+                let meant = line[range.upperBound...].trimmingCharacters(in: .whitespaces)
+                if !said.isEmpty && !meant.isEmpty { fixes.append((said, meant)); continue }
+            }
+            kept.append(raw)
+        }
     }
 
-    private func save() {
-        try? dictionary.write(to: Self.url, atomically: true, encoding: .utf8)
-        saved = dictionary
+    private func saveWords() { try? (words.joined(separator: "\n") + "\n").write(to: Self.wordsURL, atomically: true, encoding: .utf8) }
+    private func saveFixes() {
+        let lines = ["# one per line: what Whisper writes => what you want"] + kept + fixes.map { "\($0.said) => \($0.meant)" }
+        let body = lines.joined(separator: "\n") + "\n"
+        try? body.write(to: Self.fixesURL, atomically: true, encoding: .utf8)
+    }
+
+    private func addWord() {
+        let w = newWord.trimmingCharacters(in: .whitespaces)
+        guard !w.isEmpty else { return }
+        if !words.contains(where: { $0.caseInsensitiveCompare(w) == .orderedSame }) { words.append(w); saveWords() }
+        newWord = ""
+    }
+
+    private func addFix() {
+        let said = newSaid.trimmingCharacters(in: .whitespaces), meant = newMeant.trimmingCharacters(in: .whitespaces)
+        guard !said.isEmpty, !meant.isEmpty else { return }
+        fixes.removeAll { $0.said.caseInsensitiveCompare(said) == .orderedSame }
+        fixes.append((said, meant))
+        saveFixes()
+        newSaid = ""; newMeant = ""
+    }
+
+    private func learn(from original: String) {
+        let change = Self.changedSpan(original, draft)
+        editing = nil
+        guard let change else { learned = "No word changed, nothing to learn."; return }
+        fixes.removeAll { $0.said.caseInsensitiveCompare(change.said) == .orderedSame }
+        fixes.append((change.said, change.meant))
+        saveFixes()
+        for (i, w) in change.meant.split(separator: " ").map(String.init).enumerated()
+        where w.count > 2 && w != w.lowercased() && !(change.start == 0 && i == 0) && !words.contains(where: { $0.caseInsensitiveCompare(w) == .orderedSame }) {
+            words.append(w)
+        }
+        saveWords()
+        learned = "Learned: “\(change.said)” → “\(change.meant)”. Next time Cosmo types it your way."
+    }
+
+    static func changedSpan(_ a: String, _ b: String) -> (said: String, meant: String, start: Int)? {
+        let clean: (String) -> [String] = { $0.split(separator: " ").map { $0.trimmingCharacters(in: .punctuationCharacters) }.filter { !$0.isEmpty } }
+        let x = clean(a), y = clean(b)
+        let same: (Int, Int) -> Bool = { i, j in i == 0 && j == 0 ? x[i].lowercased() == y[j].lowercased() : x[i] == y[j] }
+        var start = 0
+        while start < min(x.count, y.count), same(start, start) { start += 1 }
+        var end = 0
+        while end < min(x.count, y.count) - start, same(x.count - 1 - end, y.count - 1 - end) { end += 1 }
+        let said = x[start..<(x.count - end)].joined(separator: " "), meant = y[start..<(y.count - end)].joined(separator: " ")
+        guard !said.isEmpty, !meant.isEmpty, x.count - end - start <= 4 else { return nil }
+        return (said, meant, start)
+    }
+}
+
+struct DictationRow: View {
+    var line: Line
+    var editing: Bool
+    @Binding var draft: String
+    var onFix: () -> Void
+    var onCancel: () -> Void
+    var onLearn: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 14) {
+                Text(clock(line.time)).monospacedDigit().foregroundStyle(.tertiary).frame(width: 44, alignment: .leading)
+                Text(line.text).textSelection(.enabled)
+                Spacer()
+                if hover && !editing {
+                    Button("Fix", action: onFix).controlSize(.small)
+                    Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(line.text, forType: .string) } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Copy")
+                }
+            }
+            if editing {
+                HStack {
+                    TextField("What you actually said", text: $draft).textFieldStyle(.roundedBorder).onSubmit(onLearn)
+                    Button("Cancel", action: onCancel).controlSize(.small)
+                    Button("Teach Cosmo", action: onLearn).controlSize(.small).keyboardShortcut(.defaultAction)
+                }
+                .padding(.leading, 58)
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+    }
+}
+
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 400
+        var x: CGFloat = 0, y: CGFloat = 0, row: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x + s.width > width, x > 0 { x = 0; y += row + spacing; row = 0 }
+            x += s.width + spacing; row = max(row, s.height)
+        }
+        return CGSize(width: width, height: y + row)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, row: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x + s.width > bounds.maxX, x > bounds.minX { x = bounds.minX; y += row + spacing; row = 0 }
+            v.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
+            x += s.width + spacing; row = max(row, s.height)
+        }
     }
 }

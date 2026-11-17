@@ -82,6 +82,8 @@ def session_rows():
         path, cached = summary(info)
         seen[path] = cached
         _, topic, last = cached
+        if info.get("name") == "cosmo" or not (topic or last):
+            continue
         rows.append({
             "name": info.get("name", ""),
             "status": info.get("status", ""),

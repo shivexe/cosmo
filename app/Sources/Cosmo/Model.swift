@@ -91,4 +91,4 @@ struct RawEvent: Decodable {
     }
 }
 
-enum DictationPhase { case off, listening, working }
+enum DictationPhase { case off, listening, locked, working }

@@ -5,8 +5,9 @@ import time
 
 from . import commands, config, dictation, events, hosts
 from .approvals import Approver
-from .brain import ClaudeBrain
+from .codex_brain import make_brain
 from .ears import Ears
+from . import hotkey
 from .hotkey import watch
 from .stt import SpeechEngine
 from .tts import Voice
@@ -27,7 +28,7 @@ class Cosmo:
         self.ears = Ears(self.cfg["end_of_speech_ms"], self.load_wake())
         self.voice = Voice(self.ears)
         self.approver = Approver(self.voice.say, self.hear_answer)
-        self.brain = ClaudeBrain(self.cfg, self.approver)
+        self.brain = make_brain(self.cfg, self.approver)
         self.last_brain = None
         self.next_uid = 0
         self.cancelled_turns = set()
@@ -42,6 +43,7 @@ class Cosmo:
         self.gate = None
         self.barge = None
         self.dictated_at = 0.0
+        self.dictation_watch = None
         self.changed_at = time.monotonic()
         self.background = set()
 
@@ -59,6 +61,8 @@ class Cosmo:
         events.emit(state, detail)
 
     def pressed(self):
+        if self.mode == "dictate":
+            return
         if self.waiting is not None and not self.waiting.done():
             self.voice.stop()
             self.mode = "answer"
@@ -81,12 +85,18 @@ class Cosmo:
 
     def dictate_start(self):
         if self.mode is not None or (self.waiting is not None and not self.waiting.done()):
+            self.unlock_dictation()
             return
         self.mode = "dictate"
         self.ears.hold_start()
         events.emit("dictating")
 
+    def unlock_dictation(self):
+        if self.dictation_watch is not None:
+            self.dictation_watch.reset()
+
     def dictate_stop(self):
+        self.unlock_dictation()
         if self.mode != "dictate":
             return
         audio = self.ears.hold_stop()
@@ -94,6 +104,16 @@ class Cosmo:
         self.dictated_at = time.monotonic()
         events.emit("dictation_working")
         self.spawn(self.finish_dictation(audio))
+
+    def dictate_locked(self):
+        if self.mode == "dictate":
+            events.emit("dictating", "locked")
+            self.spawn(self.dictation_cap(self.ears.held))
+
+    async def dictation_cap(self, held):
+        await asyncio.sleep(300)
+        if self.mode == "dictate" and self.ears.held is held:
+            self.dictate_stop()
 
     def dictate_cancel(self):
         if self.mode == "dictate":
@@ -135,12 +155,26 @@ class Cosmo:
     def woke(self):
         if not self.always():
             return
-        events.emit("wake")
-        self.armed_at = time.monotonic()
+        self.armed_at = stamp = time.monotonic()
         self.arm_reason = "wake"
         if self.waiting is None and self.state == "idle":
             self.set("listening")
             self.spawn(self.calm_down(self.armed_at))
+        if self.voice_id is not None:
+            self.spawn(self.confirm_wake(self.ears.last(1.5), stamp))
+        else:
+            events.emit("wake")
+
+    async def confirm_wake(self, audio, stamp):
+        if await asyncio.to_thread(self.voice_id.is_me, audio):
+            events.emit("wake")
+            return
+        if self.ears.wake is not None:
+            self.ears.wake.last = 0.0
+        if self.armed_at == stamp and self.arm_reason == "wake":
+            self.armed_at = self.arm_reason = None
+            if self.state == "listening" and self.mode is None:
+                self.settle()
 
     async def calm_down(self, stamp):
         await asyncio.sleep(self.cfg["wake_window_seconds"] + 2)
@@ -431,8 +465,11 @@ async def run():
     cosmo.ears.on_utterance = lambda audio: loop.call_soon_threadsafe(cosmo.spoke, audio)
     cosmo.ears.on_wake = lambda: loop.call_soon_threadsafe(cosmo.woke)
     watch(cosmo.cfg["hotkey"], asyncio.get_running_loop(), cosmo.pressed, cosmo.released)
-    if cosmo.cfg["dictation_key"] and cosmo.cfg["dictation_key"] != cosmo.cfg["hotkey"]:
-        watch(cosmo.cfg["dictation_key"], loop, cosmo.dictate_start, cosmo.dictate_stop, cosmo.dictate_cancel)
+    if cosmo.cfg["dictation_key"] and hotkey.overlaps(cosmo.cfg["dictation_key"], cosmo.cfg["hotkey"]):
+        events.emit("error", "The dictation shortcut overlaps the talk shortcut, so dictation is off. Pick another one.")
+    elif cosmo.cfg["dictation_key"]:
+        cosmo.dictation_watch = watch(cosmo.cfg["dictation_key"], loop, cosmo.dictate_start, cosmo.dictate_stop, cosmo.dictate_cancel,
+              cosmo.dictate_locked if cosmo.cfg["dictation_double_tap"] else None)
     cosmo.spawn(cosmo.announce(cosmo.brain))
     pid_file = config.HOME / "cosmo.pid"
     pid_file.write_text(str(os.getpid()))
