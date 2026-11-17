@@ -10,6 +10,7 @@ from . import config
 
 SENTENCE = re.compile(r"(?<=[.!?])\s+")
 LOOKAHEAD = 2
+MARKDOWN = re.compile(r"[*`#>]+|^\s*[-•]\s+", re.M)
 
 
 def load_pronunciations(path):
@@ -46,6 +47,7 @@ class Voice:
             threading.Thread(target=target, daemon=True).start()
 
     def say(self, text):
+        text = MARKDOWN.sub(" ", text)
         cfg = config.load()
         pron = load_pronunciations(config.path_of(cfg, "pronunciations_file"))
         for sentence in SENTENCE.split(text.strip()):

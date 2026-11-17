@@ -46,6 +46,8 @@ def text_of(msg):
     delta = msg.event.get("delta") or {} if isinstance(msg, StreamEvent) else {}
     if isinstance(msg, StreamEvent) and msg.event.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
         return delta["text"]
+    if isinstance(msg, StreamEvent) and msg.event.get("type") == "content_block_stop":
+        return "\n"
     return None
 
 
@@ -70,19 +72,13 @@ class ClaudeBrain:
         self.holder = None
         self.asks = 0
         self.busy = False
-        self.unsolicited = False
         self.answers = asyncio.Queue()
         self.extras = asyncio.Queue()
         self.reader = None
 
     async def _read(self):
         async for msg in self.client.receive_messages():
-            if not self.busy and not self.unsolicited:
-                self.unsolicited = True
-            to_extras = self.unsolicited
-            if isinstance(msg, ResultMessage):
-                self.unsolicited = False
-            (self.extras if to_extras else self.answers).put_nowait(msg)
+            (self.answers if self.busy else self.extras).put_nowait(msg)
 
     async def _connect(self):
         await self.client.connect()

@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections import deque
 
 from . import config, events
 from .approvals import Approver
@@ -28,6 +29,7 @@ class Cosmo:
         self.next_uid = 0
         self.cancelled_turns = set()
         self.speakers = {}
+        self.history = deque(maxlen=16)
         self.state = "idle"
         self.turn_id = 0
         self.task = None
@@ -280,6 +282,10 @@ class Cosmo:
         if not command or command.lower().strip(" .,!?") in STOP_WORDS:
             return self.settle()
         text = command
+        self.history.append(f"User: {text}")
+        if brain is self.helper and len(self.history) > 1:
+            recent = "\n".join(list(self.history)[:-1])
+            text = f"(You are Cosmo's second brain; the main one is still working. Recent conversation for context:\n{recent})\n\n{text}"
         spoke = False
         stream = brain.ask(text)
         try:
@@ -291,6 +297,7 @@ class Cosmo:
                     self.speakers[uid] = (brain, asyncio.current_task())
                     self.spawn(self.report(at, mine))
                 print(f"  cosmo: {sentence}")
+                self.history.append(f"Cosmo: {sentence}")
                 self.voice.say(sentence)
                 self.settle()
         finally:
@@ -313,6 +320,7 @@ class Cosmo:
             while self.talking() or self.waiting is not None or self.state == "listening":
                 await asyncio.sleep(0.3)
             print(f"  cosmo (on its own): {sentence}")
+            self.history.append(f"Cosmo: {sentence}")
             self.voice.say(sentence)
             self.settle()
             await asyncio.to_thread(self.voice.wait)
