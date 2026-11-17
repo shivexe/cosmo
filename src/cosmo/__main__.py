@@ -1,5 +1,8 @@
-from . import config, events
+import asyncio
 
-cfg = config.load()
-events.emit("ready", f"voice={cfg['voice']} engine={cfg['speech_engine']}")
-print("ready")
+from .loop import run
+
+try:
+    asyncio.run(run())
+except KeyboardInterrupt:
+    pass
