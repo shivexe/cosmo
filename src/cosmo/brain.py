@@ -5,9 +5,13 @@ import re
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, StreamEvent
 
 CREDENTIALS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL")
-VOICE_STYLE = "You are being spoken aloud. Answer in short plain sentences, no markdown, no code blocks."
+VOICE_STYLE = (
+    "You are being spoken aloud. Answer in short plain sentences, no markdown, no code blocks. "
+    "When you pass the user's decision to another session, start with 'User says:' and quote his words."
+)
 END = re.compile(r"[.!?](?:\s)")
 MIN_WORDS = 3
+NAME = "cosmo"
 
 
 def take_sentences(buffer):
@@ -41,6 +45,7 @@ class ClaudeBrain:
                 can_use_tool=approve,
                 model=cfg["brain_model"],
                 cwd=os.path.expanduser("~"),
+                extra_args={"name": NAME},
             )
         )
         self.connected = False
