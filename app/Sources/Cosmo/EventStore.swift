@@ -165,6 +165,8 @@ final class EventStore {
             note(.conversation, "Stopped", time)
         case "error":
             note(.problem, d.text, time)
+        case "audio_glitch":
+            note(.problem, d.text, time)
         case "not_you":
             note(.wake, "Ignored a voice that isn’t yours", time)
         default:

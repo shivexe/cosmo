@@ -6,8 +6,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let store = EventStore()
     private var overlay: OverlayPanel?
     private var timer: Timer?
+    private var activity: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Cosmo listens and speaks in real time")
         let store = Self.store
         store.start()
         store.startCosmo()

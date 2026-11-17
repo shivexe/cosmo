@@ -331,6 +331,15 @@ class Cosmo:
                 self.settle()
 
 
+async def report_glitches(ears):
+    seen = 0
+    while True:
+        await asyncio.sleep(10)
+        if ears.glitches > seen:
+            events.emit("audio_glitch", f"{ears.glitches - seen} audio dropouts in the last 10 s")
+            seen = ears.glitches
+
+
 async def run():
     cosmo = Cosmo()
     loop = asyncio.get_running_loop()
@@ -343,6 +352,7 @@ async def run():
     pid_file.write_text(str(os.getpid()))
     cosmo.spawn(commands.follow(cosmo))
     cosmo.spawn(commands.snapshot_sessions())
+    cosmo.spawn(report_glitches(cosmo.ears))
     events.emit("ready")
     how = {"always": "just talk", "wake": "say hey cosmo"}.get(cosmo.cfg["listen_mode"], f"hold {cosmo.cfg['hotkey']} to talk, release to send")
     print(f"ready. {how}; talk over Cosmo or press the key to interrupt. ctrl-c quits.")

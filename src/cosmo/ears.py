@@ -14,6 +14,8 @@ from . import events
 
 RATE = 16000
 FRAME = 160
+OUT_RATE = 48000
+OUT_BLOCK = FRAME * 3
 VAD_FRAME = 512
 PRE_ROLL = 10
 WARMUP_SECONDS = 3.0
@@ -31,16 +33,22 @@ class Ears:
         self.playing = []
         self.played = 0.0
         self.last_sound = 0.0
+        self.glitches = 0
         self.held = None
         self.frames = queue.Queue()
+        self.reverse = queue.Queue()
+        self.refs = self.fed = 0
+        self.captured = self.cleaned = 0
         self.on_start = lambda: None
         self.on_utterance = lambda audio: None
         self.model = load_silero_vad()
         self.end_ms = end_of_speech_ms
-        self.stream = sd.Stream(samplerate=RATE, blocksize=FRAME, channels=1, dtype="float32", latency="low", callback=self._callback)
-        self.aec.set_stream_delay(int(sum(self.stream.latency) * 1000))
+        self.mic = sd.InputStream(samplerate=RATE, blocksize=FRAME, channels=1, dtype="float32", latency="high", callback=self._mic)
+        self.speaker = sd.OutputStream(samplerate=OUT_RATE, blocksize=OUT_BLOCK, channels=1, dtype="float32", latency="high", callback=self._speaker)
+        self.aec.set_stream_delay(int((self.mic.latency + self.speaker.latency) * 1000))
         threading.Thread(target=self._listen, daemon=True).start()
-        self.stream.start()
+        self.speaker.start()
+        self.mic.start()
 
     def is_playing(self):
         with self.lock:
@@ -51,16 +59,19 @@ class Ears:
 
     def play(self, audio, still_wanted=lambda: True):
         done = threading.Event()
-        samples = resample_poly(audio, 2, 3).astype(np.float32)
+        ref = resample_poly(audio, 2, 3).astype(np.float32)
+        samples = np.zeros(len(ref) * 3, dtype=np.float32)
+        up = resample_poly(audio, 2, 1)[: len(samples)]
+        samples[: len(up)] = up
         with self.lock:
             if not still_wanted():
                 return
-            self.playing.append([samples, 0, done])
+            self.playing.append([samples, 0, done, ref])
         done.wait()
 
     def clear(self):
         with self.lock:
-            for _, _, done in self.playing:
+            for _, _, done, _ in self.playing:
                 done.set()
             self.playing.clear()
 
@@ -69,38 +80,60 @@ class Ears:
 
     def hold_stop(self):
         blocks, self.held = self.held, None
+        target, deadline = self.captured, time.monotonic() + 0.5
+        while self.cleaned < target and time.monotonic() < deadline:
+            time.sleep(0.005)
         return np.concatenate(blocks) if blocks else np.zeros(0, dtype=np.float32)
 
-    def _callback(self, indata, outdata, frames, time_info, status):
+    def _speaker(self, outdata, frames, time_info, status):
         out = np.zeros(frames, dtype=np.float32)
+        ref = np.zeros(frames // 3, dtype=np.float32)
         filled = 0
         with self.lock:
             while filled < frames and self.playing:
-                samples, pos, done = self.playing[0]
+                samples, pos, done, r = self.playing[0]
                 n = min(frames - filled, len(samples) - pos)
                 out[filled : filled + n] = samples[pos : pos + n]
+                ref[filled // 3 : (filled + n) // 3] = r[pos // 3 : (pos + n) // 3]
                 filled += n
                 self.playing[0][1] = pos + n
                 if pos + n >= len(samples):
                     done.set()
                     self.playing.pop(0)
-        self.played += filled / RATE
+        self.played += filled / OUT_RATE
         if filled:
             self.last_sound = time.monotonic()
         outdata[:, 0] = out
-        self.aec.process_reverse_stream((out * 32767).astype(np.int16).tobytes())
-        clean = np.frombuffer(self.aec.process_stream((indata[:, 0] * 32767).astype(np.int16).tobytes()), dtype=np.int16).astype(np.float32) / 32767
-        held = self.held
+        if status.output_underflow:
+            self.glitches += 1
+        self.reverse.put(ref)
+        self.refs += 1
+
+    def _mic(self, indata, frames, time_info, status):
+        if status.input_overflow:
+            self.glitches += 1
+        self.captured += 1
+        quiet = time.monotonic() - self.last_sound > ECHO_TAIL
+        self.frames.put((quiet, self.refs, self.held, indata[:, 0].copy()))
+
+    def _clean(self, raw, refs, held):
+        while self.fed < refs:
+            self.aec.process_reverse_stream((self.reverse.get() * 32767).astype(np.int16).tobytes())
+            self.fed += 1
+        processed = self.aec.process_stream((raw * 32767).astype(np.int16).tobytes())
+        clean = np.frombuffer(processed, dtype=np.int16).astype(np.float32) / 32767
         if held is not None:
             held.append(clean)
-        self.frames.put((time.monotonic() - self.last_sound > ECHO_TAIL, clean))
+        self.cleaned += 1
+        return clean
 
     def _listen(self):
         vad = VADIterator(self.model, threshold=0.5, sampling_rate=RATE, min_silence_duration_ms=self.end_ms)
         pending = np.zeros(0, dtype=np.float32)
         pre, utterance, speaking, guarded = deque(maxlen=PRE_ROLL), [], False, False
         while True:
-            quiet, incoming = self.frames.get()
+            quiet, refs, held, raw = self.frames.get()
+            incoming = self._clean(raw, refs, held)
             if self.wake is not None:
                 try:
                     if self.wake.feed(incoming, quiet):
