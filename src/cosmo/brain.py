@@ -93,9 +93,10 @@ class ClaudeBrain:
             await self._connect()
         self.cancelled = False
         self.busy = True
-        finished = False
+        finished = sent = False
         try:
             await self.client.query(text)
+            sent = True
             buffer = ""
             while True:
                 msg = await self.answers.get()
@@ -110,11 +111,17 @@ class ClaudeBrain:
                     for s in sentences:
                         yield s
         finally:
-            if not finished:
-                await self.client.interrupt()
-                while not isinstance(await self.answers.get(), ResultMessage):
+            if sent and not finished:
+                try:
+                    await asyncio.wait_for(self.drain(), 30)
+                except Exception:
                     pass
             self.busy = False
+
+    async def drain(self):
+        await self.client.interrupt()
+        while not isinstance(await self.answers.get(), ResultMessage):
+            pass
 
     async def announcements(self):
         buffer = ""
