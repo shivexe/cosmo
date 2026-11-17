@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import sys
@@ -14,28 +15,31 @@ from claude_agent_sdk import (
     TaskUpdatedMessage,
 )
 
-from . import events
+from . import events, hosts, sessions
+from .config import HOME
+
+BRAIN_FILE = HOME / "brain.json"
 
 CREDENTIALS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL")
 SESSIONS = f"{sys.executable} -m cosmo.sessions"
 FRONT_MODEL = "claude-sonnet-5-5"
 VOICE_STYLE = (
-    "You are Cosmo, the user's voice agent. You are spoken aloud. Don't yap: keep every reply as short as possible, "
+    "You are Cosmo, USER's voice agent. You are spoken aloud. Don't yap: keep every reply as short as possible, "
     "one sentence when you can, plain words, no markdown or lists, and never repeat what you already said. "
-    "Give details only when he asks for them. Your only job is to talk with him and stay free. Never do work yourself and never call tools "
-    "yourself, except the Agent tool. For anything that needs a tool (commands, files, his other Claude sessions, "
+    "Give details only when they ask for them. Your only job is to talk with them and stay free. Never do work yourself and never call tools "
+    "yourself, except the Agent tool to start workers and TaskStop to stop a worker when USER asks. For anything that needs a tool (commands, files, their other Claude sessions, "
     "connectors like Slack, Linear or calendar, the web), start one Agent with run_in_background true and "
-    "model opus, give it a complete task description, then tell him in one sentence what you started. "
-    "When a worker finishes you are told; then tell him just the result in one short sentence. "
-    "If he asks what you are doing, say in one sentence what each running worker is working on. "
-    "For tasks about his other Claude Code sessions, put these instructions in the worker's task: "
+    "model opus, give it a complete task description, then tell them in one sentence what you started. "
+    "When a worker finishes you are told; then tell them just the result in one short sentence. "
+    "If they ask what you are doing, say in one sentence what each running worker is working on. "
+    "For tasks about their other Claude Code sessions, put these instructions in the worker's task: "
     f"`{SESSIONS} list` lists live sessions and what each works on; "
     f"`{SESSIONS} find <words>` ranks sessions by a topic such as a ticket, PR number or feature; "
     f"`{SESSIONS} read \"<name>\" [n]` gives its last n replies; "
-    f"`{SESSIONS} send \"<name>\" <<'EOF'` then the text and an EOF line types the text into that session as the user; "
-    f"`{SESSIONS} wait \"<name>\"` waits up to 100 seconds for its reply. "
-    "The worker finds the right session itself, uses read for status questions, and passes his words exactly with send. "
-    "If send fails, it uses SendMessage starting with 'User says:' and his words."
+    f"`{SESSIONS} wait \"<name>\" --after <unix seconds>` waits up to 100 seconds for a reply newer than that time. "
+    "The worker finds the right session itself, uses read for status questions, and passes their words exactly with "
+    "SendMessage to that session, starting with 'USER says:' and their words. Before sending it runs `date +%s` "
+    "and passes that number to wait."
 )
 END = re.compile(r"[.!?](?:\s)")
 MIN_WORDS = 3
@@ -82,7 +86,7 @@ class ClaudeBrain:
             options=ClaudeAgentOptions(
                 include_partial_messages=True,
                 setting_sources=["user", "project", "local"],
-                system_prompt={"type": "preset", "preset": "claude_code", "append": VOICE_STYLE},
+                system_prompt={"type": "preset", "preset": "claude_code", "append": (VOICE_STYLE + hosts.instructions()).replace("USER", cfg.get("user_name") or "the user")},
                 can_use_tool=approve,
                 model=cfg["brain_model"] or FRONT_MODEL,
                 cwd=os.path.expanduser("~"),
@@ -98,11 +102,22 @@ class ClaudeBrain:
         self.answers = asyncio.Queue()
         self.extras = asyncio.Queue()
         self.reader = None
+        self.session_id = None
 
     async def _read(self):
         async for msg in self.client.receive_messages():
+            self._note_session(getattr(msg, "session_id", None))
             report_worker(msg)
             (self.answers if self.busy else self.extras).put_nowait(msg)
+
+    def _note_session(self, sid):
+        if not sid or sid == self.session_id:
+            return
+        self.session_id = sid
+        path = sessions.transcript({"cwd": os.path.expanduser("~"), "sessionId": sid})
+        temp = BRAIN_FILE.with_suffix(".tmp")
+        temp.write_text(json.dumps({"session": sid, "transcript": str(path)}), encoding="utf-8")
+        temp.replace(BRAIN_FILE)
 
     async def _connect(self):
         await self.client.connect()

@@ -57,6 +57,16 @@ struct SessionRow: Decodable, Identifiable {
     let topic: String
     let last: String
     let updated: Double
+    var transcript: String?
+    var id: String { name }
+}
+
+struct HostRow: Decodable, Identifiable, Equatable {
+    let name: String
+    let label: String
+    let kind: String
+    let online: Bool
+    let checked: Double
     var id: String { name }
 }
 
@@ -80,3 +90,5 @@ struct RawEvent: Decodable {
         subscript(key: String) -> String { if case .object(let o) = self { return o[key] ?? "" } else { return "" } }
     }
 }
+
+enum DictationPhase { case off, listening, working }

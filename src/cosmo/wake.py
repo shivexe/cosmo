@@ -1,5 +1,6 @@
 import re
 import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,7 @@ class Wake:
         if verifier_path and Path(verifier_path).exists():
             options = {"custom_verifier_models": {self.name: str(verifier_path)}, "custom_verifier_threshold": verifier_threshold}
         self.model = openwakeword.Model(wakeword_models=[str(model_path)], inference_framework="onnx", **options)
+        self.model.preprocessor.raw_data_buffer = deque(maxlen=CHUNK * 4)
         self.threshold = threshold
         self.pending = np.zeros(0, dtype=np.float32)
         self.last = 0.0

@@ -1,8 +1,9 @@
 import asyncio
 import os
+import signal
 import time
 
-from . import commands, config, events
+from . import commands, config, dictation, events, hosts
 from .approvals import Approver
 from .brain import ClaudeBrain
 from .ears import Ears
@@ -40,6 +41,8 @@ class Cosmo:
         self.arm_reason = None
         self.gate = None
         self.barge = None
+        self.dictated_at = 0.0
+        self.changed_at = time.monotonic()
         self.background = set()
 
     def spawn(self, coro):
@@ -52,6 +55,7 @@ class Cosmo:
         if self.waiting is not None and not self.waiting.done() and state != "waiting_for_approval":
             return
         self.state = state
+        self.changed_at = time.monotonic()
         events.emit(state, detail)
 
     def pressed(self):
@@ -74,6 +78,41 @@ class Cosmo:
             self.spawn(self.finish_answer(audio))
         else:
             self.task = asyncio.create_task(self.turn(audio, at, self.task, self.turn_id))
+
+    def dictate_start(self):
+        if self.mode is not None or (self.waiting is not None and not self.waiting.done()):
+            return
+        self.mode = "dictate"
+        self.ears.hold_start()
+        events.emit("dictating")
+
+    def dictate_stop(self):
+        if self.mode != "dictate":
+            return
+        audio = self.ears.hold_stop()
+        self.mode = None
+        self.dictated_at = time.monotonic()
+        events.emit("dictation_working")
+        self.spawn(self.finish_dictation(audio))
+
+    def dictate_cancel(self):
+        if self.mode == "dictate":
+            self.ears.hold_stop()
+            self.mode = None
+            self.dictated_at = time.monotonic()
+            events.emit("dictation_done")
+
+    async def finish_dictation(self, audio):
+        try:
+            text = await asyncio.to_thread(self.engine.transcribe, audio, self.words)
+            text = dictation.clean(text, dictation.load_dictionary())
+            if text:
+                await asyncio.to_thread(dictation.paste, text + " ")
+                events.emit("dictated", text)
+        except Exception as error:
+            events.emit("error", f"dictation: {error!r}")
+        finally:
+            events.emit("dictation_done")
 
     def load_wake(self):
         if self.cfg["listen_mode"] != "wake":
@@ -140,7 +179,7 @@ class Cosmo:
             self.spoke(audio)
 
     def spoke(self, audio):
-        if not self.always():
+        if not self.always() or time.monotonic() - len(audio) / 16000 < self.dictated_at:
             return
         early, self.barge = self.barge, None
         if early is not None and not early.done():
@@ -358,6 +397,24 @@ class Cosmo:
                 self.settle()
 
 
+async def trim_memory(cosmo):
+    trimmed_at = 0.0
+    while True:
+        await asyncio.sleep(10)
+        idle = cosmo.state == "idle" and cosmo.mode is None and not cosmo.voice_busy()
+        if idle and time.monotonic() - cosmo.changed_at > 30 and cosmo.changed_at > trimmed_at:
+            trimmed_at = time.monotonic()
+            await asyncio.to_thread(release_gpu_cache, cosmo)
+
+
+def release_gpu_cache(cosmo):
+    import torch
+
+    if torch.backends.mps.is_available():
+        with cosmo.engine.lock:
+            torch.mps.empty_cache()
+
+
 async def report_glitches(ears):
     seen = 0
     while True:
@@ -374,17 +431,34 @@ async def run():
     cosmo.ears.on_utterance = lambda audio: loop.call_soon_threadsafe(cosmo.spoke, audio)
     cosmo.ears.on_wake = lambda: loop.call_soon_threadsafe(cosmo.woke)
     watch(cosmo.cfg["hotkey"], asyncio.get_running_loop(), cosmo.pressed, cosmo.released)
+    if cosmo.cfg["dictation_key"] and cosmo.cfg["dictation_key"] != cosmo.cfg["hotkey"]:
+        watch(cosmo.cfg["dictation_key"], loop, cosmo.dictate_start, cosmo.dictate_stop, cosmo.dictate_cancel)
     cosmo.spawn(cosmo.announce(cosmo.brain))
     pid_file = config.HOME / "cosmo.pid"
     pid_file.write_text(str(os.getpid()))
     cosmo.spawn(commands.follow(cosmo))
     cosmo.spawn(commands.snapshot_sessions())
     cosmo.spawn(report_glitches(cosmo.ears))
+    cosmo.spawn(trim_memory(cosmo))
+    cosmo.spawn(hosts.watch())
     events.emit("ready")
+    try:
+        from ApplicationServices import AXIsProcessTrusted
+        if not AXIsProcessTrusted():
+            events.emit("permission", "accessibility")
+    except Exception:
+        pass
     how = {"always": "just talk", "wake": "say hey cosmo"}.get(cosmo.cfg["listen_mode"], f"hold {cosmo.cfg['hotkey']} to talk, release to send")
     print(f"ready. {how}; talk over Cosmo or press the key to interrupt. ctrl-c quits.")
+    stop = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
     try:
-        await asyncio.Event().wait()
+        await stop.wait()
     finally:
+        try:
+            await asyncio.wait_for(cosmo.brain.close(), 5)
+        except Exception:
+            pass
         pid_file.unlink(missing_ok=True)
-        await cosmo.brain.close()
+        os._exit(0)

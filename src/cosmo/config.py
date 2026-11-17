@@ -7,9 +7,11 @@ WORDS = HOME / "words.txt"
 PRONUNCIATIONS = HOME / "pronunciations.txt"
 
 DEFAULTS = {
+    "user_name": "",
     "voice": "af_heart",
     "speed": 1.0,
     "hotkey": "alt_r",
+    "dictation_key": "cmd_r",
     "listen_mode": "hotkey",
     "wake_words": ["hey cosmo", "cosmo"],
     "wake_model": str(HOME / "wake" / "hey_cosmo.onnx"),
@@ -19,7 +21,7 @@ DEFAULTS = {
     "voice_id_threshold": 0.25,
     "brain_model": None,
     "speech_engine": "whisper-small-lora",
-    "adapter_path": "~/cosmo/lab/finetune/runs/small-r16-e3",
+    "adapter_path": "",
     "words_file": str(WORDS),
     "pronunciations_file": str(PRONUNCIATIONS),
     "end_of_speech_ms": 700,

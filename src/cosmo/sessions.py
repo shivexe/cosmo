@@ -8,7 +8,6 @@ from pathlib import Path
 
 SESSIONS = Path.home() / ".claude" / "sessions"
 PROJECTS = Path.home() / ".claude" / "projects"
-CMUX = "/Applications/cmux.app/Contents/Resources/bin/cmux"
 TAIL_BYTES = 2_000_000
 SHORT = 160
 
@@ -16,18 +15,23 @@ SHORT = 160
 STOP = {"what", "whats", "status", "this", "that", "with", "from", "have", "about", "task", "session", "working", "work", "the", "and", "for"}
 
 
-SENT = Path.home() / ".cosmo" / "sent.json"
 
 
-def alive(info):
+def running(info):
     if not isinstance(info.get("pid"), int) or info["pid"] <= 0:
         return False
     try:
         os.kill(info["pid"], 0)
     except OSError:
         return False
-    started = subprocess.run(["ps", "-o", "lstart=", "-p", str(info["pid"])], capture_output=True, text=True, env={**os.environ, "TZ": "UTC"}).stdout
-    return " ".join(started.split()) == " ".join(str(info.get("procStart", "")).split())
+    return True
+
+
+def start_times(pids):
+    if not pids:
+        return {}
+    out = subprocess.run(["ps", "-o", "pid=,lstart=", "-p", ",".join(map(str, pids))], capture_output=True, text=True, env={**os.environ, "TZ": "UTC"}).stdout
+    return {int(line.split()[0]): " ".join(line.split()[1:]) for line in out.splitlines() if line.strip()}
 
 
 def transcript(info):
@@ -42,9 +46,10 @@ def live():
             info = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
-        if info.get("kind") == "interactive" and alive(info):
+        if info.get("kind") == "interactive" and running(info):
             out.append(info)
-    return out
+    started = start_times([info["pid"] for info in out])
+    return [info for info in out if started.get(info["pid"]) == " ".join(str(info.get("procStart", "")).split())]
 
 
 def entries(info):
@@ -144,62 +149,30 @@ def cmd_read(args):
         print(f"- {text[:1500]}")
 
 
-def surface(info):
-    env = subprocess.run(["ps", "-E", "-p", str(info["pid"]), "-o", "command="], capture_output=True, text=True).stdout
-    found = dict(re.findall(r"\b(CMUX_SURFACE_ID|CMUX_WORKSPACE_ID)=(\S+)", env))
-    if "CMUX_SURFACE_ID" not in found:
-        raise SystemExit(f"{info['name']} is not running in cmux, so I cannot type into it; use SendMessage instead")
-    return found
-
-
-def cmd_send(args):
-    info = find_one(args[0])
-    text = (" ".join(args[1:]) or sys.stdin.read()).strip().lstrip("!/ ").strip()
-    if not text:
-        raise SystemExit("not sent: no text")
-    where = surface(info)
-    result = subprocess.run(
-        [CMUX, "paste", "--workspace", where.get("CMUX_WORKSPACE_ID", ""), "--surface", where["CMUX_SURFACE_ID"], "--submit", "--", text],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode:
-        raise SystemExit(f"not sent: {(result.stderr or result.stdout).strip()}")
-    try:
-        sent = json.loads(SENT.read_text())
-    except (OSError, ValueError):
-        sent = {}
-    sent[str(info["pid"])] = time.time() * 1000
-    SENT.parent.mkdir(exist_ok=True)
-    temp = SENT.with_suffix(".tmp")
-    temp.write_text(json.dumps(sent))
-    temp.replace(SENT)
-    print(f"typed into {info['name']} as User: {text}")
-
-
 def cmd_wait(args):
+    after = None
+    if "--after" in args:
+        i = args.index("--after")
+        after = float(args[i + 1]) * 1000
+        args = args[:i] + args[i + 2 :]
     info = find_one(args[0])
     deadline = time.time() + float(args[1] if len(args) > 1 else 100)
     path = SESSIONS / f"{info['pid']}.json"
-    since = info.get("statusUpdatedAt", 0)
-    try:
-        since = json.loads(SENT.read_text()).get(str(info["pid"]), since)
-    except (OSError, ValueError):
-        pass
+    since = after if after is not None else info.get("statusUpdatedAt", 0)
     while time.time() < deadline:
-        time.sleep(3)
         try:
             now = json.loads(path.read_text())
         except (OSError, ValueError):
-            continue
+            now = {}
         if now.get("status") == "idle" and now.get("statusUpdatedAt", 0) > since:
             return cmd_read([args[0], "1"])
+        time.sleep(3)
     print(f"{info['name']} is still working; run wait again")
 
 
-COMMANDS = {"list": cmd_list, "find": cmd_find, "read": cmd_read, "send": cmd_send, "wait": cmd_wait}
+COMMANDS = {"list": cmd_list, "find": cmd_find, "read": cmd_read, "wait": cmd_wait}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
-        raise SystemExit("usage: list | find <words> | read <name> [n] | send <name> <text> | wait <name> [seconds]")
+        raise SystemExit("usage: list | find <words> | read <name> [n] | wait <name> [seconds]")
     COMMANDS[sys.argv[1]](sys.argv[2:])

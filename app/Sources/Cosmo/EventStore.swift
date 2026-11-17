@@ -15,6 +15,13 @@ final class EventStore {
     var lastHeard = ""
     var approval: String?
     var lines: [Line] = []
+    var dictations: [Line] = []
+    var hosts: [HostRow] = []
+    var brainTranscript: String?
+    var missingPermission = false
+    var dictation: DictationPhase = .off
+    @ObservationIgnored private var hostsModified: Date?
+    @ObservationIgnored private var brainModified: Date?
     var workers: [Worker] = []
     var activity: [ActivityItem] = []
     var sessions: [SessionRow] = []
@@ -24,6 +31,8 @@ final class EventStore {
     @ObservationIgnored private var asked: String?
     @ObservationIgnored private var source: DispatchSourceFileSystemObject?
     @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var sessionsModified: Date?
+    @ObservationIgnored private var sessionsData: Data?
 
     var runningWorkers: [Worker] { workers.filter(\.running) }
     var doneWorkers: [Worker] { workers.filter { !$0.running }.reversed() }
@@ -53,11 +62,17 @@ final class EventStore {
         readNew(skipPartialFirstLine: offset > 0)
         watch()
         loadSessions()
+        loadHosts()
+        loadBrain()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                if self?.source == nil { self?.watch() }
-                self?.readNew(skipPartialFirstLine: false)
+                if self?.source == nil {
+                    self?.watch()
+                    self?.readNew(skipPartialFirstLine: false)
+                }
                 self?.loadSessions()
+                self?.loadHosts()
+                self?.loadBrain()
             }
         }
     }
@@ -113,6 +128,8 @@ final class EventStore {
         switch e.state {
         case "ready":
             state = .idle
+            dictation = .off
+            missingPermission = false
             approval = nil
             for i in workers.indices where workers[i].running { workers[i].status = "stopped" }
         case "idle", "listening", "thinking", "speaking":
@@ -167,16 +184,56 @@ final class EventStore {
             note(.problem, d.text, time)
         case "audio_glitch":
             note(.problem, d.text, time)
+        case "dictated":
+            dictations.append(Line(time: time, fromYou: true, text: d.text))
+            if dictations.count > 200 { dictations.removeFirst(dictations.count - 200) }
+            note(.conversation, "Dictated: \(d.text)", time)
         case "not_you":
             note(.wake, "Ignored a voice that isn’t yours", time)
+        case "permission":
+            missingPermission = true
+        case "dictating":
+            dictation = .listening
+        case "dictation_working":
+            dictation = .working
+        case "dictation_done":
+            dictation = .off
+        case "host":
+            note(.worker, d.text, time)
+        case "audio_reset":
+            note(.problem, d.text == "stalled" ? "Microphone stopped; restarted the audio" : "Restarted the audio after a device change or wake", time)
         default:
             break
         }
     }
 
+    private func loadBrain() {
+        let url = Self.home.appendingPathComponent("brain.json")
+        let modified = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+        guard modified != brainModified else { return }
+        brainModified = modified
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let path = obj["transcript"] as? String, path != brainTranscript else { return }
+        brainTranscript = path
+    }
+
+    private func loadHosts() {
+        let url = Self.home.appendingPathComponent("hosts.json")
+        let modified = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+        guard modified != hostsModified else { return }
+        hostsModified = modified
+        guard let data = try? Data(contentsOf: url), let rows = try? JSONDecoder().decode([HostRow].self, from: data), rows != hosts else { return }
+        hosts = rows
+    }
+
     private func loadSessions() {
-        guard let data = try? Data(contentsOf: Self.sessionsURL),
+        let modified = (try? FileManager.default.attributesOfItem(atPath: Self.sessionsURL.path)[.modificationDate]) as? Date
+        guard modified != sessionsModified else { return }
+        sessionsModified = modified
+        guard let data = try? Data(contentsOf: Self.sessionsURL), data != sessionsData,
               let rows = try? JSONDecoder().decode([SessionRow].self, from: data) else { return }
+        sessionsData = data
         sessions = rows
     }
 
@@ -203,10 +260,45 @@ final class EventStore {
         } else if alive && state == .offline {
             state = .idle
         }
-        if alive || launched?.isRunning != true { starting = false }
+        if starting && (alive || launched?.isRunning != true) { starting = false }
+        if !alive, let p = launched, !p.isRunning {
+            launched = nil
+            crashes = crashes.filter { $0 > Date().addingTimeInterval(-600) } + [Date()]
+            if crashes.count <= 3 {
+                note(.problem, "Cosmo stopped unexpectedly. Restarting it.", Date())
+                startCosmo()
+            } else {
+                note(.problem, "Cosmo keeps stopping. See ~/.cosmo/cosmo.log", Date())
+            }
+        }
     }
 
-    static let python = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("cosmo/.venv/bin/python")
+    @ObservationIgnored private var crashes: [Date] = []
+
+    func restartCosmo() {
+        let url = Self.home.appendingPathComponent("cosmo.pid")
+        if let pid = (try? String(contentsOf: url, encoding: .utf8)).flatMap({ Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }) {
+            kill(pid, SIGTERM)
+        }
+        let old = launched
+        if old?.isRunning == true { old?.terminate() }
+        launched = nil
+        starting = true
+        Task { @MainActor in
+            for _ in 0..<40 {
+                try? await Task.sleep(for: .milliseconds(250))
+                checkAlive()
+                if state == .offline && old?.isRunning != true { break }
+            }
+            startCosmo()
+        }
+    }
+
+    static var python: URL {
+        let configured = ConfigFile().string("python", "")
+        let path = configured.isEmpty ? Self.home.appendingPathComponent("venv/bin/python").path : (configured as NSString).expandingTildeInPath
+        return URL(fileURLWithPath: path)
+    }
     @ObservationIgnored private var launched: Process?
     var starting = false
 

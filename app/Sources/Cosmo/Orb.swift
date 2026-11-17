@@ -24,9 +24,10 @@ struct Orb: View {
 
     private var glowing: Bool { state == .listening || state == .speaking || state == .waiting }
     private var beat: Double { state == .speaking ? 0.55 : 1.4 }
+    @State private var onScreen = true
 
     var body: some View {
-        TimelineView(.animation) { context in
+        TimelineView(.animation(minimumInterval: nil, paused: !onScreen || state == .idle || state == .offline)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             let angle = Angle.degrees((t / spinSeconds).truncatingRemainder(dividingBy: 1) * 360)
             let pulse = 0.5 + 0.5 * sin(t * 2 * .pi / beat)
@@ -51,8 +52,40 @@ struct Orb: View {
             .frame(width: size, height: size)
         }
         .frame(width: size, height: size)
+        .background(WindowVisibility(visible: $onScreen))
         .accessibilityElement()
         .accessibilityLabel("Cosmo, \(state.title)")
+    }
+}
+
+struct WindowVisibility: NSViewRepresentable {
+    @Binding var visible: Bool
+
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) { view.report = { visible = $0 } }
+
+    final class Probe: NSView {
+        var report: (Bool) -> Void = { _ in }
+        private var token: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let token { NotificationCenter.default.removeObserver(token) }
+            token = nil
+            guard let window else { return }
+            token = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.update() }
+            }
+            DispatchQueue.main.async { self.update() }
+        }
+
+        private func update() {
+            report(window?.occlusionState.contains(.visible) ?? false)
+        }
+
+        deinit {
+            if let token { NotificationCenter.default.removeObserver(token) }
+        }
     }
 }
 

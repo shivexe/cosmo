@@ -28,7 +28,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$APP"
+codesign --force --sign "${COSMO_SIGN_IDENTITY:--}" "$APP"
 echo "built $(pwd)/$APP"
 if [ "$1" = "--install" ]; then
   rm -rf /Applications/Cosmo.app

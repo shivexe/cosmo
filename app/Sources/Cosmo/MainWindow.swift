@@ -2,7 +2,7 @@ import SwiftUI
 
 enum Pane: String, CaseIterable, Identifiable {
     case now = "Now", inbox = "Inbox", activity = "Activity", workers = "Workers"
-    case devices = "Devices", sessions = "Sessions", conversation = "Conversation", dictation = "Dictation"
+    case devices = "Devices", sessions = "Sessions", dictation = "Dictation"
     var id: String { rawValue }
     var icon: String {
         switch self {
@@ -12,7 +12,6 @@ enum Pane: String, CaseIterable, Identifiable {
         case .workers: return "square.stack.3d.up"
         case .devices: return "laptopcomputer.and.iphone"
         case .sessions: return "terminal"
-        case .conversation: return "bubble.left.and.bubble.right"
         case .dictation: return "text.cursor"
         }
     }
@@ -20,13 +19,14 @@ enum Pane: String, CaseIterable, Identifiable {
 
 struct MainWindow: View {
     var store: EventStore
-    @State private var section: Pane? = .now
-    @State private var ask = ""
-    @FocusState private var askFocused: Bool
+    @AppStorage("pane") private var pane = Pane.now.rawValue
+    private var section: Binding<Pane?> {
+        Binding(get: { Pane(rawValue: pane) ?? .now }, set: { pane = ($0 ?? .now).rawValue })
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $section) {
+            List(selection: section) {
                 ForEach(Pane.allCases) { s in
                     Label(s.rawValue, systemImage: s.icon)
                         .badge(badge(for: s))
@@ -37,43 +37,31 @@ struct MainWindow: View {
             .safeAreaInset(edge: .bottom) { DevicesMini(store: store).padding(12) }
         } detail: {
             VStack(spacing: 0) {
-                ScrollView {
-                    Group {
-                        switch section ?? .now {
-                        case .now: NowView(store: store)
-                        case .inbox: InboxView(store: store)
-                        case .activity: ActivityView(store: store)
-                        case .workers: WorkersView(store: store)
-                        case .devices: DevicesView(store: store)
-                        case .sessions: SessionsView(store: store)
-                        case .conversation: ConversationView(store: store)
-                        case .dictation: DictationView()
+                switch section.wrappedValue ?? .now {
+                case .sessions: SessionsView(store: store)
+                case .now: NowView(store: store)
+                default:
+                    ScrollView {
+                        Group {
+                            switch section.wrappedValue ?? .now {
+                            case .inbox: InboxView(store: store)
+                            case .activity: ActivityView(store: store)
+                            case .workers: WorkersView(store: store)
+                            case .devices: DevicesView(store: store)
+                            case .dictation: DictationView(store: store)
+                            default: EmptyView()
+                            }
                         }
+                        .padding(.horizontal, 34)
+                        .padding(.vertical, 28)
+                        .frame(maxWidth: 1100, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.horizontal, 34)
-                    .padding(.vertical, 28)
-                    .frame(maxWidth: 1100, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                StatusBar(store: store)
-            }
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "sparkle").foregroundStyle(.secondary)
-                        TextField("Ask Cosmo to do something", text: $ask)
-                            .textFieldStyle(.plain)
-                            .focused($askFocused)
-                            .onSubmit { store.ask(ask); ask = "" }
-                        Text("⌘K").font(.caption).foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 14)
-                    .frame(width: 460, height: 32)
-                    .glassEffect(.regular, in: Capsule())
-                }
+                if section.wrappedValue != .now { StatusBar(store: store) }
             }
         }
-        .background { Button("") { askFocused = true }.keyboardShortcut("k", modifiers: .command).hidden() }
+        .background { Button("") { pane = Pane.now.rawValue }.keyboardShortcut("k", modifiers: .command).hidden() }
         .containerBackground(.ultraThinMaterial, for: .window)
         .preferredColorScheme(.dark)
         .frame(minWidth: 980, minHeight: 640)
@@ -117,6 +105,12 @@ struct DevicesMini: View {
                 Circle().fill(store.state == .offline ? Color.gray : Color(hex: 0x7CC4FF)).frame(width: 7, height: 7)
                     .shadow(color: Color(hex: 0x7CC4FF, opacity: store.state == .offline ? 0 : 0.8), radius: 4)
                 Text("This Mac").font(.system(size: 12.5))
+            }
+            ForEach(store.hosts) { h in
+                HStack(spacing: 8) {
+                    Circle().fill(h.online ? Color(hex: 0x7CC4FF) : Color.gray).frame(width: 7, height: 7)
+                    Text(h.label).font(.system(size: 12.5)).foregroundStyle(h.online ? .primary : .secondary)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -1,6 +1,7 @@
 import queue
 import threading
 import time
+import warnings
 from collections import deque
 
 import numpy as np
@@ -11,6 +12,8 @@ from scipy.signal import resample_poly
 from silero_vad import VADIterator, load_silero_vad
 
 from . import events
+
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="sounddevice")
 
 RATE = 16000
 FRAME = 160
@@ -45,12 +48,50 @@ class Ears:
         self.on_utterance = lambda audio: None
         self.model = load_silero_vad()
         self.end_ms = end_of_speech_ms
+        self.reset = threading.Event()
+        self.resync = False
+        self._open()
+        threading.Thread(target=self._listen, daemon=True).start()
+        threading.Thread(target=self._watch, daemon=True).start()
+
+    def _open(self):
         self.mic = sd.InputStream(samplerate=RATE, blocksize=FRAME, channels=1, dtype="float32", latency="high", callback=self._mic)
         self.speaker = sd.OutputStream(samplerate=OUT_RATE, blocksize=OUT_BLOCK, channels=1, dtype="float32", latency="high", callback=self._speaker)
         self.aec.set_stream_delay(int((self.mic.latency + self.speaker.latency) * 1000))
-        threading.Thread(target=self._listen, daemon=True).start()
         self.speaker.start()
         self.mic.start()
+
+    def restart(self):
+        self.reset.set()
+
+    def _watch(self):
+        seen, patience, failures = self.captured, 3.0, 0
+        while True:
+            asked = self.reset.wait(patience)
+            stalled = not asked and self.captured == seen
+            if not (asked or stalled):
+                seen, patience = self.captured, 3.0
+                continue
+            time.sleep(0.5)
+            self.reset.clear()
+            try:
+                for stream in (self.mic, self.speaker):
+                    stream.abort()
+                    stream.close()
+                if sd._initialized:
+                    sd._terminate()
+                sd._initialize()
+                self.resync = True
+                self._open()
+                failures = 0
+                patience = min(patience * 2, 60) if stalled else 3.0
+                events.emit("audio_reset", "stalled" if stalled else "")
+            except Exception as error:
+                failures += 1
+                patience = min(5.0 * 2**failures, 60)
+                if failures == 1:
+                    events.emit("error", f"audio restart: {error!r}")
+            seen = self.captured
 
     def is_playing(self):
         with self.lock:
@@ -108,7 +149,8 @@ class Ears:
         outdata[:, 0] = out
         if status.output_underflow:
             self.glitches += 1
-        self.reverse.put(ref)
+        if self.reverse.qsize() < RATE // FRAME:
+            self.reverse.put(ref)
         self.refs += 1
 
     def _mic(self, indata, frames, time_info, status):
@@ -119,8 +161,18 @@ class Ears:
         self.frames.put((quiet, self.refs, self.held, indata[:, 0].copy()))
 
     def _clean(self, raw, refs, held):
+        if self.resync:
+            self.resync = False
+            while not self.reverse.empty():
+                self.reverse.get_nowait()
+            self.fed = refs
         while self.fed < refs:
-            self.aec.process_reverse_stream((self.reverse.get() * 32767).astype(np.int16).tobytes())
+            try:
+                ref = self.reverse.get_nowait()
+            except queue.Empty:
+                self.fed = refs
+                break
+            self.aec.process_reverse_stream((ref * 32767).astype(np.int16).tobytes())
             self.fed += 1
         processed = self.aec.process_stream((raw * 32767).astype(np.int16).tobytes())
         clean = np.frombuffer(processed, dtype=np.int16).astype(np.float32) / 32767

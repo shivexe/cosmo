@@ -101,3 +101,57 @@ struct VoiceBars: View {
         }
     }
 }
+
+final class DictationPanel: NSPanel {
+    static let size = NSSize(width: 92, height: 92)
+
+    init(store: EventStore) {
+        super.init(contentRect: NSRect(origin: .zero, size: Self.size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        isFloatingPanel = true
+        level = .statusBar
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        backgroundColor = .clear
+        isOpaque = false
+        hasShadow = false
+        hidesOnDeactivate = false
+        ignoresMouseEvents = true
+        let host = NSHostingView(rootView: DictationBubble(store: store))
+        host.sizingOptions = []
+        contentView = host
+        place()
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.place()
+        }
+    }
+
+    func place() {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        let f = screen.visibleFrame
+        setFrameOrigin(NSPoint(x: f.maxX - Self.size.width - 6, y: f.midY - Self.size.height / 2))
+    }
+}
+
+struct DictationBubble: View {
+    var store: EventStore
+
+    var body: some View {
+        ZStack {
+            if store.dictation != .off {
+                VStack(spacing: 6) {
+                    Orb(state: store.dictation == .listening ? .listening : .thinking, size: 30, halo: false)
+                    if store.dictation == .listening {
+                        VoiceBars().scaleEffect(0.7)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                .frame(width: 64, height: 76)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .frame(width: DictationPanel.size.width, height: DictationPanel.size.height)
+        .animation(.spring(duration: 0.3), value: store.dictation)
+        .environment(\.colorScheme, .dark)
+    }
+}

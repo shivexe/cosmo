@@ -43,8 +43,9 @@ class SpeechEngine:
         self.processor = WhisperProcessor.from_pretrained(MODEL)
         model = WhisperForConditionalGeneration.from_pretrained(MODEL, dtype=torch.float32)
         model.generation_config.forced_decoder_ids = None
-        model = PeftModel.from_pretrained(model, str(config.path_of(cfg, "adapter_path")))
-        self.model = model.merge_and_unload().to(self.device).eval()
+        if cfg.get("adapter_path"):
+            model = PeftModel.from_pretrained(model, str(config.path_of(cfg, "adapter_path"))).merge_and_unload()
+        self.model = model.to(self.device).eval()
         self.vad = load_silero_vad()
         self.lock = threading.Lock()
 

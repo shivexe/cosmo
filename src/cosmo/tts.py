@@ -5,6 +5,7 @@ import threading
 import numpy as np
 import torch
 from kokoro import KPipeline
+from torch.nn.utils.weight_norm import WeightNorm
 
 from . import config
 
@@ -37,6 +38,9 @@ class Voice:
         self.ears = ears
         device = "mps" if torch.backends.mps.is_available() else "cpu"
         self.pipe = KPipeline(lang_code="a", device=device, repo_id="hexgrad/Kokoro-82M")
+        for module in self.pipe.model.modules():
+            if any(isinstance(hook, WeightNorm) for hook in module._forward_pre_hooks.values()):
+                torch.nn.utils.remove_weight_norm(module)
         self.generation = 0
         self.todo = queue.Queue()
         self.ready = queue.Queue(maxsize=LOOKAHEAD)
