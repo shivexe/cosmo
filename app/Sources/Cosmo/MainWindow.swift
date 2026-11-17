@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum Pane: String, CaseIterable, Identifiable {
-    case now = "Now", workers = "Workers", sessions = "Sessions", dictation = "Dictation", devices = "Devices", activity = "Activity"
+    case now = "Now", workers = "Tasks", sessions = "Sessions", dictation = "Dictation", devices = "Devices", activity = "Activity"
     var id: String { rawValue }
     var icon: String {
         switch self {

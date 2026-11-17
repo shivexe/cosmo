@@ -53,11 +53,6 @@ struct OverlayCapsule: View {
                         if store.state == .listening || store.state == .speaking {
                             VoiceBars()
                         }
-                        let running = store.runningWorkers.count
-                        if running > 0 && store.approval == nil {
-                            Divider().frame(height: 18)
-                            Text("\(running) running").font(.system(size: 12.5)).foregroundStyle(.secondary)
-                        }
                     }
                     if store.approval != nil {
                         HStack(spacing: 8) {
@@ -159,5 +154,85 @@ struct DictationBubble: View {
         .frame(width: DictationPanel.size.width, height: DictationPanel.size.height)
         .animation(.spring(duration: 0.3), value: store.dictation)
         .environment(\.colorScheme, .dark)
+    }
+}
+
+final class HighlightPanel: NSPanel {
+    init() {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        isFloatingPanel = true
+        level = .screenSaver
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        backgroundColor = .clear
+        isOpaque = false
+        hasShadow = false
+        ignoresMouseEvents = true
+        contentView = NSHostingView(rootView: HighlightBox())
+    }
+
+    func flash(_ box: CGRect) {
+        guard let primary = NSScreen.screens.first else { return }
+        let rect = NSRect(x: box.minX - 4, y: primary.frame.maxY - box.maxY - 4, width: box.width + 8, height: box.height + 8)
+        setFrame(rect, display: true)
+        alphaValue = 1
+        orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 1.2
+            animator().alphaValue = 0
+        }
+    }
+}
+
+struct HighlightBox: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .strokeBorder(Color(hex: 0x7CC4FF), lineWidth: 2.5)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color(hex: 0x7CC4FF, opacity: 0.12)))
+            .shadow(color: Color(hex: 0x7CC4FF, opacity: 0.8), radius: 6)
+    }
+}
+
+final class ControlPanel: NSPanel {
+    static let size = NSSize(width: 460, height: 64)
+
+    init(store: EventStore) {
+        super.init(contentRect: NSRect(origin: .zero, size: Self.size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        isFloatingPanel = true
+        level = .statusBar
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        backgroundColor = .clear
+        isOpaque = false
+        hasShadow = false
+        hidesOnDeactivate = false
+        let host = NSHostingView(rootView: ControlBar(store: store))
+        host.sizingOptions = []
+        contentView = host
+        place()
+    }
+
+    func place() {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        let f = screen.visibleFrame
+        setFrameOrigin(NSPoint(x: f.midX - Self.size.width / 2, y: f.minY + 14))
+    }
+}
+
+struct ControlBar: View {
+    var store: EventStore
+    var body: some View {
+        if let control = store.control {
+            HStack(spacing: 10) {
+                Image(systemName: "cursorarrow.motionlines").foregroundStyle(Color(hex: 0x7CC4FF))
+                Text("Using \(control.app)").font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Text(control.action).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 8)
+                Button("Stop") { store.stop() }.controlSize(.small).keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 16)
+            .frame(width: ControlPanel.size.width - 16, height: 44)
+            .glassEffect(.regular, in: Capsule())
+            .frame(width: ControlPanel.size.width, height: ControlPanel.size.height)
+            .environment(\.colorScheme, .dark)
+        }
     }
 }

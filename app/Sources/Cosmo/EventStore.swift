@@ -20,6 +20,8 @@ final class EventStore {
     var brainTranscript: String?
     var missingPermission = false
     var dictation: DictationPhase = .off
+    var control: ControlAction?
+    var clicking = false
     @ObservationIgnored private var hostsModified: Date?
     @ObservationIgnored private var brainModified: Date?
     var workers: [Worker] = []
@@ -41,13 +43,14 @@ final class EventStore {
         if let approval { return "Should I \(approval)?" }
         switch state {
         case .offline: return starting ? "Starting Cosmo…" : "Cosmo isn’t running"
-        case .listening: return lastHeard.isEmpty ? "Listening" : lastHeard
-        case .speaking: return lastSaid
+        case .listening: return "Listening"
+        case .speaking: return "Speaking"
         case .thinking: return "Thinking"
         case .waiting: return "Waiting for your answer"
         case .idle:
+            if control != nil { return "Working" }
             let n = runningWorkers.count
-            return n == 0 ? "Say “Hey Cosmo”" : "\(n) worker\(n == 1 ? "" : "s") running in the background"
+            return n == 0 ? "Say “Hey Cosmo”" : "Working"
         }
     }
 
@@ -179,6 +182,7 @@ final class EventStore {
         case "wake_not_confirmed":
             note(.wake, "Ignored: \(d.text)", time)
         case "interrupted", "talked_over":
+            control = nil
             note(.conversation, "Stopped", time)
         case "error":
             note(.problem, d.text, time)
@@ -190,6 +194,26 @@ final class EventStore {
             note(.conversation, "Dictated: \(d.text)", time)
         case "not_you":
             note(.wake, "Ignored a voice that isn’t yours", time)
+        case "app_action":
+            let nums = d["box"].split(separator: ",").compactMap { Double($0) }
+            let box = nums.count == 4 ? CGRect(x: nums[0], y: nums[1], width: nums[2], height: nums[3]) : nil
+            let action = ControlAction(app: d["app"], action: d["action"], box: box)
+            if Date().timeIntervalSince(time) < 5 {
+                control = action
+                if action.action == "Clicking" {
+                    clicking = true
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(1.2))
+                        if self.control?.id == action.id { self.clicking = false }
+                    }
+                } else {
+                    clicking = false
+                }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(4))
+                    if self.control?.id == action.id { self.control = nil }
+                }
+            }
         case "permission":
             missingPermission = true
         case "dictating":

@@ -3,7 +3,7 @@ import os
 import signal
 import time
 
-from . import commands, config, dictation, events, hosts
+from . import commands, config, dictation, events, hosts, mac
 from .approvals import Approver
 from .codex_brain import make_brain
 from .ears import Ears
@@ -44,6 +44,7 @@ class Cosmo:
         self.barge = None
         self.dictated_at = 0.0
         self.dictation_watch = None
+        self.stops = 0
         self.changed_at = time.monotonic()
         self.background = set()
 
@@ -262,11 +263,15 @@ class Cosmo:
 
     def interrupt(self):
         self.turn_id += 1
+        self.stops += 1
+        mac.stop()
         self.speakers.clear()
         self.voice.stop()
         for brain in (self.brain,):
             if brain.busy or brain.taken:
                 self.spawn(brain.interrupt())
+            if hasattr(brain, "stop_everything"):
+                self.spawn(brain.stop_everything())
         events.emit("interrupted")
 
     async def hear_answer(self):
@@ -386,7 +391,10 @@ class Cosmo:
             self.spawn(self.calm_down(self.armed_at))
             return self.set("listening") if self.cfg["listen_mode"] == "wake" else self.settle()
         self.end_pending(gate_out)
-        if not command or command.lower().strip(" .,!?") in STOP_WORDS:
+        if command.lower().strip(" .,!?") in STOP_WORDS:
+            self.interrupt()
+            return self.set("idle")
+        if not command:
             return self.settle()
         text = command
         spoke = False
@@ -420,8 +428,11 @@ class Cosmo:
 
     async def announce(self, brain):
         async for sentence in brain.announcements():
+            stops = self.stops
             while self.talking() or self.waiting is not None or self.state == "listening":
                 await asyncio.sleep(0.3)
+            if stops != self.stops:
+                continue
             print(f"  cosmo (on its own): {sentence}")
             events.emit("said", sentence)
             self.voice.say(sentence)

@@ -182,7 +182,7 @@ struct WorkersView: View {
     var store: EventStore
     var body: some View {
         if store.workers.isEmpty {
-            ContentUnavailableView("No workers yet", systemImage: "square.stack.3d.up", description: Text("When you ask Cosmo to do something, it starts a worker here."))
+            ContentUnavailableView("No tasks yet", systemImage: "square.stack.3d.up", description: Text("What you ask Cosmo to do shows up here."))
         } else {
             List {
                 if !store.runningWorkers.isEmpty {

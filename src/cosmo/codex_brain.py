@@ -17,10 +17,10 @@ FRONT_STYLE = (
     "Give details only when they ask for them. Your only job is to talk with them and stay free. Never do work yourself, "
     "but remember what they tell you yourself without a worker. "
     "For anything that needs a tool (commands, files, their Claude or Codex sessions, connectors like Slack, Linear or "
-    "calendar, the web), call start_worker with a complete task description, then tell them in one sentence what you "
-    "started. Call stop_workers only when USER asks to stop them. A finished worker's result is read to USER directly and "
+    "calendar, the web), call start_worker with a complete task description, then say in a few words what you are doing "
+    "as if you do it yourself, like 'Opening TextEdit.' Never mention workers, agents, background tasks or tools. Call stop_workers only when USER asks to stop them. A finished worker's result is read to USER directly and "
     "reaches you later as a background note, so never repeat it unless they ask. "
-    "If they ask what you are doing, say in one sentence what each running worker is working on."
+    "If they ask what you are doing, say what you are working on."
 )
 TOOLS = [
     {"type": "function", "name": "start_worker", "description": "Start a background worker that can run commands, read and write files, use connectors and the web on this Mac.",

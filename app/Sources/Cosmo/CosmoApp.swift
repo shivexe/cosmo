@@ -8,6 +8,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let store = EventStore()
     private var overlay: OverlayPanel?
     private var dictating: DictationPanel?
+    private let highlight = HighlightPanel()
+    private var controlBar: ControlPanel?
+
+    private func show(_ panel: NSPanel?, _ visible: Bool) {
+        guard let panel else { return }
+        if visible && !panel.isVisible {
+            panel.orderFrontRegardless()
+        } else if !visible && panel.isVisible && Self.store.clicking {
+            panel.orderOut(nil)
+        } else if !visible && panel.isVisible {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard self != nil else { return }
+                if panel.isVisible && !self!.stillWanted(panel) { panel.orderOut(nil) }
+            }
+        }
+    }
+
+    private func stillWanted(_ panel: NSPanel) -> Bool {
+        let store = Self.store
+        if panel === overlay { return !store.clicking && (store.approval != nil || [.listening, .thinking, .speaking, .waiting].contains(store.state)) }
+        if panel === dictating { return store.dictation != .off }
+        if panel === controlBar { return store.control != nil && !store.clicking }
+        return false
+    }
     private var timer: Timer?
     private var activity: NSObjectProtocol?
 
@@ -16,12 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let store = Self.store
         store.start()
         store.startCosmo()
-        let panel = OverlayPanel(store: store)
-        panel.orderFrontRegardless()
-        overlay = panel
-        let dictationPanel = DictationPanel(store: store)
-        dictationPanel.orderFrontRegardless()
-        dictating = dictationPanel
+        overlay = OverlayPanel(store: store)
+        dictating = DictationPanel(store: store)
+        controlBar = ControlPanel(store: store)
         trackApproval()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             Task { @MainActor in store.checkAlive() }
@@ -47,7 +68,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func trackApproval() {
         withObservationTracking {
-            overlay?.ignoresMouseEvents = Self.store.approval == nil
+            let store = Self.store
+            overlay?.ignoresMouseEvents = store.approval == nil
+            show(overlay, !store.clicking && (store.approval != nil || [.listening, .thinking, .speaking, .waiting].contains(store.state)))
+            show(dictating, store.dictation != .off)
+            show(controlBar, store.control != nil && !store.clicking)
+            if let box = store.control?.box, box.width > 0, box.height > 0, box.width < 3000 {
+                highlight.flash(box)
+            }
         } onChange: {
             Task { @MainActor in self.trackApproval() }
         }

@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 enum CosmoState: String {
     case offline, idle, listening, thinking, speaking, waiting = "waiting_for_approval"
@@ -46,7 +47,7 @@ struct ActivityItem: Identifiable {
     let text: String
 
     enum Kind: String, CaseIterable {
-        case conversation = "Conversation", worker = "Workers", approval = "Approvals", wake = "Wake word", problem = "Problems"
+        case conversation = "Conversation", worker = "Tasks", approval = "Approvals", wake = "Wake word", problem = "Problems"
     }
 }
 
@@ -92,3 +93,10 @@ struct RawEvent: Decodable {
 }
 
 enum DictationPhase { case off, listening, locked, working }
+
+struct ControlAction: Equatable {
+    let id = UUID()
+    let app: String
+    let action: String
+    let box: CGRect?
+}

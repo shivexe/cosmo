@@ -265,10 +265,10 @@ struct SettingsView: View {
                         Text("Haiku 5.5").tag("claude-haiku-5-5")
                         Text("Opus 5.5").tag("claude-opus-5-5")
                     }
-                    LabeledContent("Workers", value: "Opus")
+                    LabeledContent("Task model", value: "Opus")
                 } else {
                     LabeledContent("Talking model", value: "Fast Codex model")
-                    LabeledContent("Workers", value: "Your default Codex model")
+                    LabeledContent("Task model", value: "Your default Codex model")
                     Text("Codex uses your ChatGPT login. Its workers can’t message your Claude sessions.").font(.caption).foregroundStyle(.secondary)
                 }
                 LabeledContent("Speech to text", value: "Whisper small.en")

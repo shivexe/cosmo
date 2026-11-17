@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import time
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
@@ -15,7 +16,7 @@ from claude_agent_sdk import (
     TaskUpdatedMessage,
 )
 
-from . import events, hosts, sessions
+from . import events, hosts, mac_tools, sessions
 from .config import HOME
 
 BRAIN_FILE = HOME / "brain.json"
@@ -29,9 +30,10 @@ VOICE_STYLE = (
     "Give details only when they ask for them. Your only job is to talk with them and stay free. Never do work yourself and never call tools "
     "yourself, except the Agent tool to start workers and TaskStop to stop a worker when USER asks. For anything that needs a tool (commands, files, their other Claude sessions, "
     "connectors like Slack, Linear or calendar, the web), start one Agent with run_in_background true and "
-    "model opus, give it a complete task description, then tell them in one sentence what you started. "
-    "When a worker finishes you are told; then tell them just the result in one short sentence. "
-    "If they ask what you are doing, say in one sentence what each running worker is working on. "
+    "model opus, give it a complete task description, then say in a few words what you are doing as if you do it "
+    "yourself, like 'Opening TextEdit.' or 'Checking Slack.' When it finishes you are told; then say just the result in one "
+    "short sentence, like 'Done, it is typed.' Never mention workers, agents, background tasks, tools or how you work; "
+    "USER only hears what is being done and what happened. If they ask what you are doing, say what you are working on. "
     "For tasks about their other Claude Code sessions, put these instructions in the worker's task: "
     f"`{SESSIONS} list` lists live sessions and what each works on; "
     f"`{SESSIONS} find <words>` ranks sessions by a topic such as a ticket, PR number or feature; "
@@ -86,8 +88,10 @@ class ClaudeBrain:
             options=ClaudeAgentOptions(
                 include_partial_messages=True,
                 setting_sources=["user", "project", "local"],
-                system_prompt={"type": "preset", "preset": "claude_code", "append": (VOICE_STYLE + hosts.instructions()).replace("USER", cfg.get("user_name") or "the user")},
+                system_prompt={"type": "preset", "preset": "claude_code", "append": (VOICE_STYLE + hosts.instructions() + mac_tools.GUIDE).replace("USER", cfg.get("user_name") or "the user")},
                 can_use_tool=approve,
+                mcp_servers={"mac": mac_tools.server},
+                allowed_tools=mac_tools.NAMES,
                 model=cfg["brain_model"] or FRONT_MODEL,
                 cwd=os.path.expanduser("~"),
                 extra_args={"name": name},
@@ -103,11 +107,17 @@ class ClaudeBrain:
         self.extras = asyncio.Queue()
         self.reader = None
         self.session_id = None
+        self.workers = set()
+        self.hush_until = 0.0
 
     async def _read(self):
         async for msg in self.client.receive_messages():
             self._note_session(getattr(msg, "session_id", None))
             report_worker(msg)
+            if isinstance(msg, TaskStartedMessage):
+                self.workers.add(msg.task_id)
+            elif isinstance(msg, TaskNotificationMessage) or (isinstance(msg, TaskUpdatedMessage) and msg.status in ("completed", "failed", "killed", "stopped")):
+                self.workers.discard(msg.task_id)
             (self.answers if self.busy else self.extras).put_nowait(msg)
 
     def _note_session(self, sid):
@@ -127,6 +137,7 @@ class ClaudeBrain:
     async def ask(self, text):
         if not self.connected:
             await self._connect()
+        self.hush_until = 0.0
         self.cancelled = False
         self.busy = True
         self.asks += 1
@@ -164,6 +175,9 @@ class ClaudeBrain:
         buffer = ""
         while True:
             msg = await self.extras.get()
+            if time.monotonic() < self.hush_until:
+                buffer = ""
+                continue
             if isinstance(msg, ResultMessage):
                 if buffer.strip():
                     yield buffer.strip()
@@ -173,7 +187,18 @@ class ClaudeBrain:
             if piece is not None:
                 sentences, buffer = take_sentences(buffer + piece)
                 for s in sentences:
+                    if time.monotonic() < self.hush_until:
+                        break
                     yield s
+
+    async def stop_everything(self):
+        self.hush_until = time.monotonic() + 4
+        while not self.extras.empty():
+            self.extras.get_nowait()
+        if not self.connected:
+            return
+        calls = [self.client.stop_task(t) for t in list(self.workers)] + [self.client.interrupt()]
+        await asyncio.gather(*(asyncio.wait_for(c, 5) for c in calls), return_exceptions=True)
 
     async def interrupt(self, only_ask=None):
         if only_ask is not None and only_ask != self.asks:

@@ -247,34 +247,111 @@ struct Bubble: View {
 
 struct Markdown: View {
     var text: String
+
+    enum Block {
+        case paragraph(String), heading(Int, String), bullet(Int, String), numbered(String, Int, String)
+        case quote(String), code(String), table([[String]]), rule
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                if block.code {
-                    Text(block.text)
-                        .font(.system(size: 12, design: .monospaced))
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.3)))
-                } else {
-                    Text(Self.inline(block.text)).lineSpacing(3)
-                }
-            }
+            ForEach(Array(Self.parse(text).enumerated()), id: \.offset) { _, block in view(block) }
         }
         .textSelection(.enabled)
     }
 
-    private var blocks: [(code: Bool, text: String)] {
-        text.components(separatedBy: "```").enumerated().compactMap { i, part in
-            var body = part
-            if i % 2 == 1, let nl = body.firstIndex(of: "\n") { body = String(body[body.index(after: nl)...]) }
-            body = body.trimmingCharacters(in: .newlines)
-            return body.isEmpty ? nil : (i % 2 == 1, body)
+    @ViewBuilder private func view(_ block: Block) -> some View {
+        switch block {
+        case .paragraph(let t):
+            Text(Self.inline(t)).lineSpacing(3)
+        case .heading(let level, let t):
+            Text(Self.inline(t)).font(level == 1 ? .title3.bold() : level == 2 ? .headline : .body.bold()).padding(.top, 4)
+        case .bullet(let depth, let t):
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text(depth == 0 ? "•" : "◦").foregroundStyle(.secondary)
+                Text(Self.inline(t)).lineSpacing(3)
+            }
+            .padding(.leading, CGFloat(depth) * 16 + 2)
+        case .numbered(let n, let depth, let t):
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(n).monospacedDigit().foregroundStyle(.secondary)
+                Text(Self.inline(t)).lineSpacing(3)
+            }
+            .padding(.leading, CGFloat(depth) * 16)
+        case .quote(let t):
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 1.5).fill(.tertiary).frame(width: 3)
+                Text(Self.inline(t)).foregroundStyle(.secondary)
+            }
+        case .code(let t):
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(t).font(.system(size: 12, design: .monospaced)).padding(10)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.quaternary))
+        case .table(let rows):
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            Text(Self.inline(cell)).fontWeight(i == 0 ? .semibold : .regular)
+                        }
+                    }
+                    if i == 0 { Divider().gridCellUnsizedAxes(.horizontal) }
+                }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.quaternary))
+        case .rule:
+            Divider()
         }
     }
 
+    static func parse(_ text: String) -> [Block] {
+        var blocks: [Block] = []
+        var paragraph: [String] = []
+        var table: [[String]] = []
+        var code: [String]?
+        func flush() {
+            if !paragraph.isEmpty { blocks.append(.paragraph(paragraph.joined(separator: "\n"))); paragraph = [] }
+            if !table.isEmpty { blocks.append(.table(table)); table = [] }
+        }
+        for raw in text.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("```") {
+                if let lines = code { blocks.append(.code(lines.joined(separator: "\n"))); code = nil } else { flush(); code = [] }
+                continue
+            }
+            if code != nil { code?.append(raw); continue }
+            let indent = (raw.prefix { $0 == " " }.count) / 2
+            if line.hasPrefix("|") {
+                if !paragraph.isEmpty { blocks.append(.paragraph(paragraph.joined(separator: "\n"))); paragraph = [] }
+                let cells = line.trimmingCharacters(in: CharacterSet(charactersIn: "|")).components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+                if !cells.allSatisfy({ $0.range(of: #"^:?-{2,}:?$"#, options: .regularExpression) != nil }) { table.append(cells) }
+                continue
+            }
+            if line.isEmpty { flush(); continue }
+            if let m = line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) {
+                flush(); blocks.append(.heading(line[m].filter { $0 == "#" }.count, String(line[m.upperBound...])))
+            } else if line.range(of: #"^(-{3,}|\*{3,}|_{3,})$"#, options: .regularExpression) != nil {
+                flush(); blocks.append(.rule)
+            } else if let m = line.range(of: #"^[-*•+]\s+"#, options: .regularExpression) {
+                flush(); blocks.append(.bullet(indent, String(line[m.upperBound...])))
+            } else if let m = line.range(of: #"^\d+[.)]\s+"#, options: .regularExpression) {
+                flush(); blocks.append(.numbered(line[m].trimmingCharacters(in: .whitespaces), indent, String(line[m.upperBound...])))
+            } else if line.hasPrefix(">") {
+                flush(); blocks.append(.quote(line.drop { $0 == ">" || $0 == " " }.description))
+            } else {
+                if !table.isEmpty { blocks.append(.table(table)); table = [] }
+                paragraph.append(line)
+            }
+        }
+        if let lines = code { blocks.append(.code(lines.joined(separator: "\n"))) }
+        flush()
+        return blocks
+    }
+
     static func inline(_ s: String) -> AttributedString {
-        let cleaned = s.replacingOccurrences(of: #"(?m)^#{1,6}\s+"#, with: "", options: .regularExpression)
-        return (try? AttributedString(markdown: cleaned, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(cleaned)
+        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
     }
 }
