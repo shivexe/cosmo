@@ -24,6 +24,7 @@ class CosmoService : Service() {
 
     @Volatile private var running = false
     private var worker: Thread? = null
+    private var keeper: Thread? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -33,6 +34,7 @@ class CosmoService : Service() {
         nm.createNotificationChannel(NotificationChannel("link", "Connection", NotificationManager.IMPORTANCE_MIN))
         nm.createNotificationChannel(NotificationChannel("approvals", "Approvals", NotificationManager.IMPORTANCE_HIGH))
         nm.createNotificationChannel(NotificationChannel("tasks", "Finished tasks", NotificationManager.IMPORTANCE_DEFAULT))
+        nm.createNotificationChannel(NotificationChannel("using", "Cosmo using the phone", NotificationManager.IMPORTANCE_LOW))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -62,6 +64,20 @@ class CosmoService : Service() {
                 }
                 stopSelf()
             }.also { it.start() }
+            keeper = Thread {
+                var sent = ""
+                var at = 0L
+                while (running) {
+                    Wireless.idleOff(this)
+                    if (Wireless.on(this)) Wireless.watch(this)
+                    val endpoint = if (Wireless.on(this)) Wireless.endpoint else ""
+                    val now = System.currentTimeMillis()
+                    if (endpoint.isNotEmpty() && (endpoint != sent || now - at > 120000)) {
+                        if (Bridge.post(this, "/adb", JSONObject().put("endpoint", endpoint)) == null) { sent = endpoint; at = now }
+                    }
+                    try { Thread.sleep(if (System.currentTimeMillis() - Wireless.lastUse < 30000 && endpoint.isEmpty()) 2000 else 15000) } catch (_: InterruptedException) { }
+                }
+            }.also { it.start() }
         } else {
             worker?.interrupt()
         }
@@ -72,6 +88,9 @@ class CosmoService : Service() {
         running = false
         Bridge.onEvent = null
         worker?.interrupt()
+        keeper?.interrupt()
+        Wireless.stop(this)
+        Wireless.idleOff(this, now = true)
         Bridge.close()
         super.onDestroy()
     }
@@ -99,6 +118,15 @@ class CosmoService : Service() {
             }
             "waiting_for_approval" -> showApproval(event.optString("id").ifBlank { null }, event.optString("detail").ifBlank { Bridge.live.value.approval ?: "Cosmo needs your approval" })
             "approval" -> showApproval(null, null)
+            "app_action" -> {
+                if (event.optJSONObject("detail")?.optString("device") == "phone") Wireless.used(this)
+                usingPhone(this, event)
+            }
+            "phone_adb" -> {
+                Wireless.turnOn(this)
+                keeper?.interrupt()
+            }
+            "interrupted" -> nm.cancel(USING_ID)
             "worker_done" -> {
                 val d = event.optJSONObject("detail") ?: return
                 val title = Bridge.live.value.tasks.firstOrNull { it.id == d.optString("id") }?.title ?: "Task finished"

@@ -14,7 +14,7 @@ import threading
 import time
 from urllib.parse import quote
 
-from . import commands, events
+from . import android, commands, events
 from .config import HOME
 
 PHONE = HOME / "phone.json"
@@ -29,7 +29,7 @@ QUEUE = 200
 SKEW = 60
 REBIND = 30
 STATES = {"idle", "listening", "thinking", "speaking", "waiting_for_approval"}
-FORWARD = STATES | {"said", "heard", "approval", "worker_started", "worker_progress", "worker_done", "interrupted", "error"}
+FORWARD = STATES | {"said", "heard", "approval", "worker_started", "worker_progress", "worker_done", "interrupted", "error", "app_action", "phone_adb"}
 TAILSCALE = ipaddress.ip_network("100.64.0.0/10")
 
 
@@ -170,6 +170,8 @@ class Bridge:
                 continue
             if event.get("state") not in FORWARD:
                 continue
+            if event.get("state") == "app_action" and (event.get("detail") or {}).get("device") != "phone":
+                continue
             self.apply(event)
             for queue in list(self.clients):
                 try:
@@ -213,6 +215,10 @@ class Bridge:
             if self.approval_id is None or str(body.get("id")) != self.approval_id:
                 return 409, {"error": "that approval is no longer waiting"}
             commands.handle(self.cosmo, {"cmd": "approve", "answer": answer})
+        elif path == "/adb":
+            if not android.remember(str(body.get("endpoint", ""))):
+                return 400, {"error": "endpoint must be a private ip:port"}
+            threading.Thread(target=android.ensure, daemon=True).start()
         elif path == "/stop":
             commands.handle(self.cosmo, {"cmd": "stop"})
         else:

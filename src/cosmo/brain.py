@@ -16,7 +16,7 @@ from claude_agent_sdk import (
     TaskUpdatedMessage,
 )
 
-from . import events, hosts, mac_tools, sessions
+from . import events, hosts, mac_tools, phone_tools, sessions
 from .config import HOME
 
 BRAIN_FILE = HOME / "brain.json"
@@ -88,10 +88,10 @@ class ClaudeBrain:
             options=ClaudeAgentOptions(
                 include_partial_messages=True,
                 setting_sources=["user", "project", "local"],
-                system_prompt={"type": "preset", "preset": "claude_code", "append": (VOICE_STYLE + hosts.instructions() + mac_tools.GUIDE).replace("USER", cfg.get("user_name") or "the user")},
+                system_prompt={"type": "preset", "preset": "claude_code", "append": (VOICE_STYLE + hosts.instructions() + mac_tools.GUIDE + phone_tools.GUIDE).replace("USER", cfg.get("user_name") or "the user")},
                 can_use_tool=approve,
-                mcp_servers={"mac": mac_tools.server},
-                allowed_tools=mac_tools.NAMES,
+                mcp_servers={"mac": mac_tools.server, "phone": phone_tools.server},
+                allowed_tools=mac_tools.NAMES + phone_tools.NAMES,
                 model=cfg["brain_model"] or FRONT_MODEL,
                 cwd=os.path.expanduser("~"),
                 extra_args={"name": name},

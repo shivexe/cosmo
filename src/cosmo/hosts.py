@@ -3,7 +3,7 @@ import json
 import subprocess
 import time
 
-from . import config, events
+from . import android, config, events
 
 HOSTS_FILE = config.HOME / "hosts.json"
 CHECK_EVERY = 60
@@ -17,9 +17,7 @@ def configured():
 def online(host):
     try:
         if host.get("kind") == "adb":
-            out =subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=5)
-            serials = [line.split()[0] for line in out.stdout.splitlines()[1:] if line.split()[-1:] == ["device"]]
-            return bool(serials) and (not host.get("target") or host["target"] in serials)
+            return bool(android.saved_endpoint() or android.devices())
         out = subprocess.run(["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", host["target"], "echo ok"],
                              capture_output=True, text=True, timeout=30)
         return out.stdout.strip().endswith("ok")
@@ -33,7 +31,7 @@ def instructions():
         label = host.get("label") or name
         if host.get("kind") == "adb":
             serial = f"-s {host['target']} " if host.get("target") else ""
-            lines.append(f"{label}: Android over adb, `adb {serial}shell <command>`; if `adb devices` does not list it, tell them to connect it")
+            lines.append(f"{label}: Android, control its apps with the phone tools when you have them; for shell commands `adb {serial}shell <command>`")
         elif host.get("target"):
             lines.append(f"{label}: `ssh -n {host['target']} \"<command>\"`, shell {host.get('shell') or 'bash'}")
     if not lines:
