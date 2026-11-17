@@ -23,6 +23,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Cosmo listens for “Hey Cosmo” and your requests. Audio stays on this Mac.</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
 </plist>

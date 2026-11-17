@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let store = Self.store
         store.start()
+        store.startCosmo()
         let panel = OverlayPanel(store: store)
         panel.orderFrontRegardless()
         overlay = panel

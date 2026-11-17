@@ -32,7 +32,7 @@ final class EventStore {
     var headline: String {
         if let approval { return "Should I \(approval)?" }
         switch state {
-        case .offline: return "Cosmo isn’t running"
+        case .offline: return starting ? "Starting Cosmo…" : "Cosmo isn’t running"
         case .listening: return lastHeard.isEmpty ? "Listening" : lastHeard
         case .speaking: return lastSaid
         case .thinking: return "Thinking"
@@ -200,6 +200,34 @@ final class EventStore {
             for i in workers.indices where workers[i].running { workers[i].status = "stopped" }
         } else if alive && state == .offline {
             state = .idle
+        }
+        if alive || launched?.isRunning != true { starting = false }
+    }
+
+    static let python = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("cosmo/.venv/bin/python")
+    @ObservationIgnored private var launched: Process?
+    var starting = false
+
+    func startCosmo() {
+        checkAlive()
+        guard state == .offline, launched?.isRunning != true else { return }
+        let process = Process()
+        process.executableURL = Self.python
+        process.arguments = ["-m", "cosmo"]
+        process.currentDirectoryURL = Self.home
+        let log = Self.home.appendingPathComponent("cosmo.log")
+        if !FileManager.default.fileExists(atPath: log.path) { FileManager.default.createFile(atPath: log.path, contents: nil) }
+        if let handle = try? FileHandle(forWritingTo: log) {
+            _ = try? handle.seekToEnd()
+            process.standardOutput = handle
+            process.standardError = handle
+        }
+        do {
+            try process.run()
+            launched = process
+            starting = true
+        } catch {
+            note(.problem, "Couldn’t start Cosmo: \(error.localizedDescription)", Date())
         }
     }
 

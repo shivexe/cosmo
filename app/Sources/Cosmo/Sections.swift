@@ -109,6 +109,11 @@ struct NowView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(store.state.title).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
                     Text(store.headline).font(.system(size: 30, weight: .semibold)).tracking(-0.6).lineLimit(3)
+                    if store.state == .offline && !store.starting {
+                        Button("Start Cosmo") { store.startCosmo() }
+                            .buttonStyle(.glassProminent)
+                            .padding(.top, 6)
+                    }
                 }
             }
             .padding(.vertical, 6)
