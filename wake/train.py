@@ -160,11 +160,45 @@ def augment(audio, rng):
     return audio.astype(np.float32)
 
 
+MINE = OUT / "mine"
+
+
+def trim(audio, pad=0.1):
+    hop = RATE // 100
+    frames = len(audio) // hop
+    level = np.sqrt((audio[: frames * hop].reshape(frames, hop) ** 2).mean(1))
+    loud = np.where(level > max(level.max() * 0.1, 0.002))[0]
+    if not len(loud):
+        return audio
+    start, end = max(0, loud[0] * hop - int(pad * RATE)), min(len(audio), (loud[-1] + 1) * hop + int(pad * RATE))
+    return audio[start:end]
+
+
+def label_mine():
+    from cosmo import config, stt
+    from cosmo.wake import said_wake_word
+
+    cfg = config.load()
+    engine, words = stt.SpeechEngine(cfg), config.path_of(cfg, "words_file")
+    labels = {f"{p.parent.name}/{p.name}": {"text": (t := engine.transcribe(np.pad(load(p), (4000, 4000)), words)), "ok": said_wake_word(t)} for p in sorted(MINE.glob("*/*.wav"))}
+    (MINE / "labels.json").write_text(json.dumps(labels, indent=2))
+    print(f"label: {sum(v['ok'] for v in labels.values())}/{len(labels)} clips contain the wake word")
+
+
+def his_recorded(split):
+    labels_file = MINE / "labels.json"
+    labels = json.loads(labels_file.read_text()) if labels_file.exists() else {}
+    clips = [p for p in sorted(MINE.glob("*/*.wav")) if labels.get(f"{p.parent.name}/{p.name}", {}).get("ok")]
+    return [trim(load(p)) for i, p in enumerate(clips) if (i % 5 == 4) == (split == "eval")]
+
+
 def his_cosmos(split):
     times = json.loads((OUT / "baseline_cosmo_times.json").read_text())
-    picked = times[: len(times) // 2 + 1] if split == "train" else times[len(times) // 2 + 1 :]
     audio = load(BASELINE)
-    return [audio[max(0, int((a - 0.6) * RATE)) : int((b + 0.1) * RATE)] for a, b, _ in picked]
+    from_baseline = [audio[max(0, int((a - 0.6) * RATE)) : int((b + 0.1) * RATE)] for a, b, _ in times]
+    if split == "train":
+        return his_recorded("train") or from_baseline[: len(times) // 2 + 1]
+    return his_recorded("eval") if his_recorded("eval") else from_baseline[len(times) // 2 + 1 :]
 
 
 def to_int16(x):
@@ -186,7 +220,7 @@ def features():
             sets[f"{kind}_{split}"] = fe.embed_clips(clips, batch_size=64)[:, -FRAMES:, :]
             print(f"  {kind}_{split}: {sets[f'{kind}_{split}'].shape}", flush=True)
     mine = his_cosmos("train")
-    sets["his_train"] = fe.embed_clips(np.stack([to_int16(place(augment(a, rng), rng, bank)) for a in mine for _ in range(40)]), batch_size=64)[:, -FRAMES:, :]
+    sets["his_train"] = fe.embed_clips(np.stack([to_int16(place(augment(a, rng), rng, bank)) for a in mine for _ in range(8)]), batch_size=64)[:, -FRAMES:, :]
     for name, long_audio in (("tts_speech", [augment(load(p), rng) for p in sorted((OUT / "tts" / "general").glob("*.wav"))]), ("real_speech", bank)):
         windows = []
         for audio in long_audio:
@@ -224,7 +258,7 @@ def train():
     data = np.load(OUT / "features.npz")
     groups = [
         (np.concatenate([data["hey_cosmo_train"], data["cosmo_train"]]), 1.0, 1.0, 192),
-        (data["his_train"], 1.0, 2.0, 64),
+        (data["his_train"], 1.0, 2.0, 96),
         (data["lookalike_train"], 0.0, 8.0, 256),
         (data["tts_speech"], 0.0, 6.0, 256),
         (data["real_speech"], 0.0, 4.0, 256),
@@ -295,6 +329,8 @@ def evaluate():
         row["his_cosmo_trained_on"] = f"{sum(near(a, b) for a, b, _ in times[: len(times) // 2 + 1])}/{len(times) // 2 + 1}"
         row["his_cosmo_held_out"] = f"{sum(near(a, b) for a, b, _ in held)}/{len(held)}"
         row["his_recording_false"] = sum(not any(a - 0.5 <= h <= b + 1.5 for a, b, _ in times) for h in hits)
+        held_mine = his_recorded("eval")
+        row["his_new_clips_held_out"] = f"{sum(bool(stream(oww, a, threshold)) for a in held_mine)}/{len(held_mine)}"
         report[str(threshold)] = row
         print(threshold, json.dumps(row), flush=True)
     (OUT / "eval.json").write_text(json.dumps(report, indent=2))
@@ -321,7 +357,7 @@ def verifier():
     )
 
 
-STEPS = {"speak": speak, "features": features, "train": train, "verifier": verifier, "eval": evaluate}
+STEPS = {"label": label_mine, "speak": speak, "features": features, "train": train, "verifier": verifier, "eval": evaluate}
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
