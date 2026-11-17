@@ -17,6 +17,7 @@ FRAME = 160
 VAD_FRAME = 512
 PRE_ROLL = 10
 WARMUP_SECONDS = 3.0
+ECHO_TAIL = 0.8
 
 
 class Ears:
@@ -29,6 +30,7 @@ class Ears:
         self.lock = threading.Lock()
         self.playing = []
         self.played = 0.0
+        self.last_sound = 0.0
         self.held = None
         self.frames = queue.Queue()
         self.on_start = lambda: None
@@ -83,6 +85,8 @@ class Ears:
                     done.set()
                     self.playing.pop(0)
         self.played += filled / RATE
+        if filled:
+            self.last_sound = time.monotonic()
         outdata[:, 0] = out
         self.aec.process_reverse_stream((out * 32767).astype(np.int16).tobytes())
         clean = np.frombuffer(self.aec.process_stream((indata[:, 0] * 32767).astype(np.int16).tobytes()), dtype=np.int16).astype(np.float32) / 32767
@@ -99,7 +103,7 @@ class Ears:
             incoming = self.frames.get()
             if self.wake is not None:
                 try:
-                    if self.wake.feed(incoming) and not self.is_playing():
+                    if self.wake.feed(incoming) and time.monotonic() - self.last_sound > ECHO_TAIL:
                         self.on_wake()
                 except Exception as error:
                     events.emit("error", f"wake: {error!r}")

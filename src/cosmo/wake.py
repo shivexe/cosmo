@@ -7,7 +7,7 @@ import openwakeword
 
 CHUNK = 1280
 REFRACTORY = 2.0
-WAKE_WORDS = re.compile(r"^\W*(?:hey\W+)?co[sz]mo\b\W*", re.I)
+WAKE_WORDS = re.compile(r"^\W*(?:(?:hey|okay|ok)\W+)?co[sz]mo\b\W*", re.I)
 
 
 def said_wake_word(text):

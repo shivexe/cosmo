@@ -16,9 +16,14 @@ SHORT = 160
 STOP = {"what", "whats", "status", "this", "that", "with", "from", "have", "about", "task", "session", "working", "work", "the", "and", "for"}
 
 
+SENT = Path.home() / ".cosmo" / "sent.json"
+
+
 def alive(info):
+    if not isinstance(info.get("pid"), int) or info["pid"] <= 0:
+        return False
     try:
-        os.kill(info.get("pid", -1), 0)
+        os.kill(info["pid"], 0)
     except OSError:
         return False
     started = subprocess.run(["ps", "-o", "lstart=", "-p", str(info["pid"])], capture_output=True, text=True, env={**os.environ, "TZ": "UTC"}).stdout
@@ -160,6 +165,12 @@ def cmd_send(args):
     )
     if result.returncode:
         raise SystemExit(f"not sent: {(result.stderr or result.stdout).strip()}")
+    try:
+        sent = json.loads(SENT.read_text())
+    except (OSError, ValueError):
+        sent = {}
+    sent[str(info["pid"])] = time.time() * 1000
+    SENT.write_text(json.dumps(sent))
     print(f"typed into {info['name']} as User: {text}")
 
 
@@ -168,6 +179,10 @@ def cmd_wait(args):
     deadline = time.time() + float(args[1] if len(args) > 1 else 100)
     path = SESSIONS / f"{info['pid']}.json"
     since = info.get("statusUpdatedAt", 0)
+    try:
+        since = json.loads(SENT.read_text()).get(str(info["pid"]), since)
+    except (OSError, ValueError):
+        pass
     while time.time() < deadline:
         time.sleep(3)
         try:
