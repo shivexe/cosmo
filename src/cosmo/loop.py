@@ -173,7 +173,7 @@ class Cosmo:
             if previous:
                 await previous
             if gate_in is not None and not await gate_in:
-                if self.state == "listening":
+                if self.state == "listening" and mine == self.turn_id and self.mode is None:
                     self.set("idle")
                 return
             if mine == self.turn_id:
