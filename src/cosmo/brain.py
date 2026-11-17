@@ -109,6 +109,12 @@ class ClaudeBrain:
         self.session_id = None
         self.workers = set()
         self.hush_until = 0.0
+        self.connecting = None
+        try:
+            asyncio.get_running_loop()
+            self._start()
+        except RuntimeError:
+            pass
 
     async def _read(self):
         async for msg in self.client.receive_messages():
@@ -134,9 +140,14 @@ class ClaudeBrain:
         self.connected = True
         self.reader = asyncio.create_task(self._read())
 
+    def _start(self):
+        if self.connecting is None or (self.connecting.done() and not self.connected):
+            self.connecting = asyncio.ensure_future(self._connect())
+        return self.connecting
+
     async def ask(self, text):
         if not self.connected:
-            await self._connect()
+            await self._start()
         self.hush_until = 0.0
         self.cancelled = False
         self.busy = True
@@ -156,6 +167,8 @@ class ClaudeBrain:
                 piece = text_of(msg)
                 if piece is not None and not self.cancelled:
                     sentences, buffer = take_sentences(buffer + piece)
+                    if piece == "\n" and buffer.strip():
+                        sentences, buffer = sentences + [buffer.strip()], ""
                     for s in sentences:
                         yield s
         finally:

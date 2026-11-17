@@ -45,7 +45,7 @@ struct OverlayCapsule: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 14) {
                         Orb(state: store.state, size: 34)
-                        Text(store.headline)
+                        Text(store.approval.map { "Should I \($0)?" } ?? store.headline)
                             .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(store.approval != nil ? Color(hex: 0xFFD08A) : .white)
                             .lineLimit(1)
@@ -98,7 +98,7 @@ struct VoiceBars: View {
 }
 
 final class DictationPanel: NSPanel {
-    static let size = NSSize(width: 92, height: 92)
+    static let size = NSSize(width: 392, height: 92)
 
     init(store: EventStore) {
         super.init(contentRect: NSRect(origin: .zero, size: Self.size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -129,8 +129,28 @@ final class DictationPanel: NSPanel {
 struct DictationBubble: View {
     var store: EventStore
 
+    private var liveText: String {
+        let text = store.dictationText.split(separator: "\n").suffix(2).joined(separator: "\n")
+        guard text.count > 90 else { return text }
+        let cut = text.suffix(90)
+        return "…" + (cut.firstIndex(of: " ").map { String(cut[cut.index(after: $0)...]) } ?? String(cut))
+    }
+
     var body: some View {
-        ZStack {
+        HStack(spacing: 8) {
+            if store.dictation != .off && !liveText.isEmpty {
+                Text(liveText)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .truncationMode(.head)
+                    .frame(maxWidth: 280, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .glassEffect(.regular.tint(.black.opacity(0.45)), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
             if store.dictation != .off {
                 VStack(spacing: 6) {
                     Orb(state: store.dictation == .working ? .thinking : .listening, size: 30, halo: false)
@@ -151,8 +171,10 @@ struct DictationBubble: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .frame(width: DictationPanel.size.width, height: DictationPanel.size.height)
+        .padding(.trailing, 14)
+        .frame(width: DictationPanel.size.width, height: DictationPanel.size.height, alignment: .trailing)
         .animation(.spring(duration: 0.3), value: store.dictation)
+        .animation(.easeOut(duration: 0.2), value: liveText.isEmpty)
         .environment(\.colorScheme, .dark)
     }
 }

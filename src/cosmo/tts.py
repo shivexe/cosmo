@@ -36,8 +36,7 @@ def mark(text, pron):
 class Voice:
     def __init__(self, ears):
         self.ears = ears
-        device = "mps" if torch.backends.mps.is_available() else "cpu"
-        self.pipe = KPipeline(lang_code="a", device=device, repo_id="hexgrad/Kokoro-82M")
+        self.pipe = KPipeline(lang_code="a", device="cpu", repo_id="hexgrad/Kokoro-82M")
         for module in self.pipe.model.modules():
             if any(isinstance(hook, WeightNorm) for hook in module._forward_pre_hooks.values()):
                 torch.nn.utils.remove_weight_norm(module)
@@ -88,6 +87,10 @@ class Voice:
             self.idle.notify_all()
 
     def _synth_loop(self):
+        try:
+            self.synth("Hi.", config.load()["voice"], 1)
+        except Exception:
+            pass
         while True:
             gen, text, voice, speed = self.todo.get()
             if gen != self.generation:

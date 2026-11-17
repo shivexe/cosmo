@@ -13,55 +13,6 @@ func elapsed(_ from: Date, _ to: Date = Date()) -> String {
     return s < 60 ? "\(s)s" : s < 3600 ? "\(s / 60)m" : "\(s / 3600)h \((s % 3600) / 60)m"
 }
 
-struct Card<Content: View>: View {
-    var tint: Color? = nil
-    @ViewBuilder var content: Content
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) { content }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(tint.map { $0.opacity(0.1) } ?? Color.white.opacity(0.04))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder((tint ?? .white).opacity(tint == nil ? 0.07 : 0.3), lineWidth: 1)
-            )
-    }
-}
-
-struct Tile: View {
-    var glyph: String
-    var colors: [Color]
-    var size: CGFloat = 36
-    var body: some View {
-        Image(systemName: glyph)
-            .font(.system(size: size * 0.42, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
-                .fill(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)))
-    }
-}
-
-enum Tiles {
-    static let failed = [Color(hex: 0xD9534F), Color(hex: 0x8F2F2C)]
-    static let claude = [Color(hex: 0xD97757), Color(hex: 0xA8553A)]
-    static let amber = [Color(hex: 0xF7B955), Color(hex: 0xC9862B)]
-}
-
-struct EmptyNote: View {
-    var icon: String
-    var text: String
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).foregroundStyle(.secondary)
-            Text(text).foregroundStyle(.secondary)
-        }
-        .padding(18)
-    }
-}
-
 // MARK: Now
 
 struct NowView: View {
@@ -70,42 +21,36 @@ struct NowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 16) {
-                Orb(state: store.state, size: 46)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(store.state.title).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                    Text(store.headline).font(.system(size: 19, weight: .semibold)).lineLimit(2)
+            HStack(spacing: 12) {
+                Orb(state: store.state, size: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(store.state == .idle && store.headline == "Working" ? "Working" : store.state.title).font(.subheadline).foregroundStyle(.secondary)
+                    Text(store.headline).font(.title2.weight(.semibold)).lineLimit(2)
                 }
                 Spacer(minLength: 16)
                 if store.state == .offline && !store.starting {
-                    Button("Start Cosmo") { store.startCosmo() }.buttonStyle(.glassProminent)
+                    Button("Start Cosmo") { store.startCosmo() }.buttonStyle(.borderedProminent)
                 } else if store.state != .idle && store.state != .offline || !store.runningWorkers.isEmpty {
-                    Button("Stop everything") { store.stop() }
-                        .buttonStyle(.glass)
+                    Button("Stop Everything") { store.stop() }
+                        .buttonStyle(.bordered)
                         .keyboardShortcut(.escape, modifiers: [])
+                        .help("Stop everything Cosmo is doing (Escape)")
                 }
             }
-            .padding(.horizontal, 30).padding(.top, 22).padding(.bottom, 14)
-            VStack(spacing: 10) {
-                if store.missingPermission { PermissionBanner(store: store) }
-                if let approval = store.approval {
-                    Card(tint: Color(hex: 0xF7B955)) {
-                        HStack(spacing: 12) {
-                            Tile(glyph: "hand.raised.fill", colors: Tiles.amber, size: 32)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Needs your OK").fontWeight(.semibold)
-                                Text(approval).font(.system(size: 12.5)).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button("Allow") { store.approve(true) }.buttonStyle(.glassProminent).tint(Color(hex: 0xF7B955))
-                            Button("Deny") { store.approve(false) }.buttonStyle(.glass)
+            .padding(.horizontal, 20).padding(.vertical, 16)
+            if store.missingPermission || store.approval != nil {
+                VStack(spacing: 8) {
+                    if store.missingPermission { PermissionBanner(store: store) }
+                    if let approval = store.approval {
+                        Notice(symbol: "hand.raised.fill", tint: .orange, title: "Needs your OK", detail: approval) {
+                            Button("Deny") { store.approve(false) }
+                            Button("Allow") { store.approve(true) }.buttonStyle(.borderedProminent)
                         }
-                        .padding(14)
                     }
                 }
+                .padding(.horizontal, 20).padding(.bottom, 16)
             }
-            .padding(.horizontal, 28)
-            Divider().opacity(0.4).padding(.top, 6)
+            Divider()
             ChatView(messages: brain.messages,
                      empty: store.brainTranscript != nil && !brain.loaded ? "Loading…" : "What can I do for you?",
                      placeholder: "Ask Cosmo to do something") { store.ask($0) }
@@ -118,25 +63,45 @@ struct NowView: View {
 struct PermissionBanner: View {
     var store: EventStore
     var body: some View {
-        Card(tint: Color(hex: 0xD9534F)) {
-            HStack(spacing: 12) {
-                Tile(glyph: "lock.shield.fill", colors: Tiles.failed, size: 32)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Hotkeys and dictation are off").fontWeight(.semibold)
-                    Text("Turn on Cosmo in Accessibility and Input Monitoring, then restart Cosmo.")
-                        .font(.system(size: 12.5)).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Accessibility") { open("Privacy_Accessibility") }.buttonStyle(.glass)
-                Button("Input Monitoring") { open("Privacy_ListenEvent") }.buttonStyle(.glass)
-                Button("Restart Cosmo") { store.restartCosmo() }.buttonStyle(.glassProminent)
-            }
-            .padding(14)
+        Notice(symbol: "lock.shield.fill", tint: .red, title: "Hotkeys and dictation are off",
+               detail: "Turn on Cosmo in Accessibility and Input Monitoring, then restart Cosmo.") {
+            Button("Accessibility…") { open("Privacy_Accessibility") }
+            Button("Input Monitoring…") { open("Privacy_ListenEvent") }
+            Button("Restart Cosmo") { store.restartCosmo() }.buttonStyle(.borderedProminent)
         }
     }
 
     private func open(_ pane: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
+    }
+}
+
+struct Notice<Actions: View>: View {
+    var symbol: String
+    var tint: Color
+    var title: String
+    var detail: String
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.title2)
+                .foregroundStyle(tint)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.headline)
+                    Text(detail).foregroundStyle(.secondary)
+                }
+                HStack(spacing: 8) { actions }.buttonStyle(.bordered)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tint.opacity(0.3)))
     }
 }
 
@@ -188,8 +153,10 @@ struct WorkersView: View {
                 if !store.runningWorkers.isEmpty {
                     Section("Running") { ForEach(store.runningWorkers) { WorkerRow(worker: $0) } }
                 }
-                Section("Finished") {
-                    ForEach(store.doneWorkers.prefix(50)) { WorkerRow(worker: $0) }
+                if !store.doneWorkers.isEmpty {
+                    Section("Finished") {
+                        ForEach(store.doneWorkers.prefix(50)) { WorkerRow(worker: $0) }
+                    }
                 }
             }
             .listStyle(.inset)
@@ -200,7 +167,6 @@ struct WorkersView: View {
 struct WorkerRow: View {
     var worker: Worker
     private var icon: (String, Color) {
-        if worker.running { return ("circle.dotted", .accentColor) }
         if worker.failed { return ("exclamationmark.triangle.fill", .red) }
         if worker.status == "stopped" { return ("stop.circle", .secondary) }
         return ("checkmark.circle.fill", .green)
@@ -209,27 +175,36 @@ struct WorkerRow: View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(worker.steps.enumerated()), id: \.offset) { _, step in
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(clock(step.0)).monospacedDigit().foregroundStyle(.tertiary)
                         Text(step.1).foregroundStyle(.secondary)
                     }
                     .font(.callout)
                 }
-                if !worker.summary.isEmpty { Text(worker.summary).textSelection(.enabled).padding(.top, 4) }
+                if !worker.summary.isEmpty {
+                    Text(worker.summary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).padding(.top, 4)
+                }
             }
-            .padding(.vertical, 4)
+            .padding(.leading, 24).padding(.vertical, 4)
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: icon.0).foregroundStyle(icon.1)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Group {
+                    if worker.running {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: icon.0).foregroundStyle(icon.1)
+                    }
+                }
+                .frame(width: 16)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(worker.title).lineLimit(1)
                     Text(plain(worker.lastStep)).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                 }
-                Spacer()
-                Text(elapsed(worker.started, worker.ended ?? Date())).monospacedDigit().foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(elapsed(worker.started, worker.ended ?? Date())).font(.callout).monospacedDigit().foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
     }
 }
 
@@ -280,6 +255,7 @@ struct DevicesView: View {
             } footer: {
                 Text("Cosmo checks each machine every minute. Double-click one to edit it, or click + to add one.").foregroundStyle(.secondary)
             }
+            PhoneSection(store: store)
         }
         .formStyle(.grouped)
         .toolbar {
@@ -376,26 +352,28 @@ struct SessionsView: View {
                 SessionItem(session: s).tag(s.id)
             }
             .listStyle(.inset)
-            .overlay { if store.sessions.isEmpty { ContentUnavailableView("No live sessions", systemImage: "terminal") } }
+            .overlay { if store.sessions.isEmpty { ContentUnavailableView("No Live Sessions", systemImage: "terminal", description: Text("Claude sessions running on this Mac show up here.")) } }
             .frame(width: 280)
-            Divider().opacity(0.3)
+            Divider()
             Group {
                 if let s = current {
                     VStack(spacing: 0) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "terminal").font(.title3).foregroundStyle(.secondary)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(s.name).fontWeight(.semibold).lineLimit(1)
-                                Text(URL(fileURLWithPath: s.folder).lastPathComponent).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(s.name).font(.headline).lineLimit(1)
+                                Text(URL(fileURLWithPath: s.folder).lastPathComponent).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                             }
-                            Spacer()
-                            Text(s.status.capitalized).font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(s.status == "busy" ? Color(hex: 0xA9DBFF) : .secondary)
+                            Spacer(minLength: 8)
+                            Label(s.status.capitalized, systemImage: s.status == "busy" ? "circle.fill" : "circle")
+                                .font(.callout)
+                                .imageScale(.small)
+                                .foregroundStyle(s.status == "busy" ? Color.accentColor : .secondary)
                         }
-                        .padding(.horizontal, 22).padding(.vertical, 12)
-                        Divider().opacity(0.4)
+                        .padding(.horizontal, 24).padding(.vertical, 12)
+                        Divider()
                         if s.transcript == nil {
-                            EmptyNote(icon: "arrow.clockwise", text: "Restart Cosmo once to load this session’s messages").frame(maxHeight: .infinity)
+                            ContentUnavailableView("No Messages Loaded", systemImage: "arrow.clockwise",
+                                                   description: Text("Restart Cosmo once to load this session’s messages."))
                         } else {
                             ChatView(messages: transcript.messages,
                                      empty: transcript.loaded ? "No messages yet" : "Loading…",
@@ -405,7 +383,7 @@ struct SessionsView: View {
                         }
                     }
                 } else {
-                    ContentUnavailableView("Pick a session", systemImage: "bubble.left.and.bubble.right", description: Text("Its conversation shows here."))
+                    ContentUnavailableView("Pick a Session", systemImage: "bubble.left.and.bubble.right", description: Text("Its conversation shows here."))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -421,12 +399,15 @@ struct SessionsView: View {
 struct SessionItem: View {
     var session: SessionRow
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                if session.status == "busy" { Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(Color.accentColor) }
-                Text(session.name).fontWeight(.semibold).lineLimit(1)
-                Spacer(minLength: 6)
-                Text(ago(session.updated / 1000)).font(.callout).foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(session.name).font(.headline).lineLimit(1)
+                Spacer(minLength: 8)
+                if session.status == "busy" {
+                    Image(systemName: "circle.fill").font(.system(size: 6)).foregroundStyle(Color.accentColor)
+                        .accessibilityLabel("Busy")
+                }
+                Text(ago(session.updated / 1000)).font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
             }
             Text(plain(session.last.isEmpty ? session.topic : session.last)).font(.callout).foregroundStyle(.secondary).lineLimit(2)
             Text(URL(fileURLWithPath: session.folder).lastPathComponent).font(.caption).foregroundStyle(.tertiary).lineLimit(1)

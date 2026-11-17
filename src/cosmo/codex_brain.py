@@ -2,13 +2,17 @@ import asyncio
 import json
 import os
 import signal
+import uuid
+from datetime import datetime, timezone
 
 from claude_agent_sdk import PermissionResultAllow
 
 from . import events, hosts
-from .brain import SESSIONS, ClaudeBrain, take_sentences
+from .brain import BRAIN_FILE, SESSIONS, ClaudeBrain, take_sentences
+from .config import HOME
 
 HOME_DIR = os.path.expanduser("~")
+TRANSCRIPTS = HOME / "codex"
 FRONT_MODEL = "gpt-5.6-luna"
 LEAN = {"features": {"shell_tool": False, "unified_exec": False, "multi_agent": False, "apps": False, "plugins": False, "memories": False, "hooks": False}}
 FRONT_STYLE = (
@@ -32,7 +36,12 @@ WORKER_STYLE = (
     "or two short plain sentences, no markdown, because it is read aloud. Commands run in a read-only sandbox without "
     "network; when you need to write files or use the network, ask for escalated permissions so USER can approve. "
     f"For USER's Claude Code sessions: `{SESSIONS} list` lists live sessions and what each works on; "
-    f"`{SESSIONS} find <words>` ranks sessions by a topic; `{SESSIONS} read \"<name>\" [n]` gives its last n replies."
+    f"`{SESSIONS} find <words>` ranks sessions by a topic; `{SESSIONS} read \"<name>\" [n]` gives its last n replies; "
+    f"`{SESSIONS} wait \"<name>\" --after <unix seconds>` waits up to 100 seconds for a reply newer than that time; "
+    f"`{SESSIONS} send \"<name>\" <<'EOF'` followed by the text on its own lines and a final `EOF` line delivers that "
+    "text into that live session and needs escalated permissions; always pass the text through that quoted heredoc, never as an argument. "
+    "To pass USER's words to a session, find the right session yourself, run `date +%s`, send 'USER says:' followed by "
+    "their words exactly, then wait with that number."
 )
 
 
@@ -69,6 +78,7 @@ class CodexBrain:
         self.count = 0
         self.notes = []
         self.tasks = set()
+        self.log = None
 
     def _named(self, text):
         return text.replace("USER", self.user)
@@ -108,6 +118,23 @@ class CodexBrain:
         else:
             self.thread = (await self._call("thread/start", {**front, "dynamicTools": TOOLS}))["thread"]["id"]
         self.connected = True
+        self._point()
+
+    def _point(self):
+        TRANSCRIPTS.mkdir(parents=True, exist_ok=True)
+        self.log = TRANSCRIPTS / f"{self.thread}.jsonl"
+        self.log.touch()
+        temp = BRAIN_FILE.with_suffix(".tmp")
+        temp.write_text(json.dumps({"session": self.thread, "transcript": str(self.log)}), encoding="utf-8")
+        temp.replace(BRAIN_FILE)
+
+    def _log(self, role, content):
+        if not self.log:
+            return
+        stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        row = {"type": role, "uuid": str(uuid.uuid4()), "timestamp": stamp, "sessionId": self.thread, "message": {"role": role, "content": content}}
+        with self.log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
 
     async def _read(self):
         try:
@@ -185,6 +212,7 @@ class CodexBrain:
         text = worker["text"] or f"A worker {status} without a result."
         events.emit("worker_done", {"id": worker["id"], "status": status, "summary": worker["text"]})
         self.notes.append(f"[Background note, not from {self.user}: worker {worker['id']} {status}. Task: {worker['task']} Result: {text}]")
+        self._log("assistant", [{"type": "text", "text": text}])
         sentences, rest = take_sentences(text + " ")
         for sentence in sentences + ([rest.strip()] if rest.strip() else []):
             self.extras.put_nowait(sentence)
@@ -199,6 +227,8 @@ class CodexBrain:
             text = f"Stopping {len(self.workers)} workers."
         else:
             return {"contentItems": [{"type": "inputText", "text": f"Unknown tool {name}."}], "success": False}
+        detail = {"description": arguments["task"]} if name == "start_worker" else {}
+        self._log("assistant", [{"type": "tool_use", "id": f"call_{uuid.uuid4().hex}", "name": name, "input": detail}])
         return {"contentItems": [{"type": "inputText", "text": text}], "success": True}
 
     async def _start_worker(self, wid, task):
@@ -224,9 +254,10 @@ class CodexBrain:
 
     async def _turn(self, text):
         notes = len(self.notes)
-        text = "\n".join(self.notes + [text])
-        self.turn = (await self._call("turn/start", {"threadId": self.thread, "input": [{"type": "text", "text": text}], "effort": "low"}))["turn"]["id"]
+        joined = "\n".join(self.notes + [text])
+        self.turn = (await self._call("turn/start", {"threadId": self.thread, "input": [{"type": "text", "text": joined}], "effort": "low"}))["turn"]["id"]
         del self.notes[:notes]
+        self._log("user", text)
         if self.cancelled:
             await self._call("turn/interrupt", {"threadId": self.thread, "turnId": self.turn})
         buffer = ""
@@ -239,6 +270,7 @@ class CodexBrain:
                 piece = params.get("delta", "")
             elif msg["method"] == "item/completed" and (params.get("item") or {}).get("type") == "agentMessage":
                 piece = "\n"
+                self._log("assistant", [{"type": "text", "text": params["item"].get("text") or ""}])
             elif msg["method"] == "turn/completed":
                 self.turn = None
                 if buffer.strip() and not self.cancelled:

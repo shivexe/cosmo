@@ -136,24 +136,25 @@ struct ChatView: View {
     var send: (String) -> Void
     @State private var draft = ""
     @FocusState private var focused: Bool
+    private let column: CGFloat = 720
 
     var body: some View {
         VStack(spacing: 0) {
             if messages.isEmpty {
                 Spacer()
-                Text(empty).font(.system(size: 24, weight: .semibold)).foregroundStyle(.secondary).padding(.bottom, 18)
+                Text(empty).font(.title).foregroundStyle(.secondary).padding(.bottom, 20)
                 composer
                 Spacer()
                 Spacer()
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 18) {
+                        LazyVStack(alignment: .leading, spacing: 24) {
                             ForEach(messages) { m in Bubble(message: m, you: you, them: them).id(m.id) }
                         }
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 22)
-                        .frame(maxWidth: 860)
+                        .frame(maxWidth: column)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 24)
                         .frame(maxWidth: .infinity)
                     }
                     .defaultScrollAnchor(.bottom)
@@ -167,25 +168,26 @@ struct ChatView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .bottom, spacing: 8) {
             TextField(placeholder, text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 14))
-                .lineLimit(1...6)
+                .lineLimit(1...8)
                 .focused($focused)
                 .onSubmit(submit)
+                .padding(.vertical, 6)
             Button(action: submit) {
-                Image(systemName: "arrow.up").font(.system(size: 13, weight: .bold))
-                    .frame(width: 26, height: 26)
+                Image(systemName: "arrow.up").fontWeight(.semibold)
+                    .frame(width: 20, height: 20)
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.borderedProminent)
             .buttonBorderShape(.circle)
+            .help("Send (Return)")
             .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .padding(.leading, 18).padding(.trailing, 8).padding(.vertical, 9)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .frame(maxWidth: 820)
-        .padding(.horizontal, 28)
+        .padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 8)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .frame(maxWidth: column)
+        .padding(.horizontal, 24)
     }
 
     private func submit() {
@@ -205,42 +207,59 @@ struct Bubble: View {
     var body: some View {
         if message.fromYou {
             HStack {
-                Spacer(minLength: 80)
+                Spacer(minLength: 96)
                 Markdown(text: message.text)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.white.opacity(0.09)))
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
+            .help(message.time.map { "\(you), \(clock($0))" } ?? you)
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Tile(glyph: "sparkle", colors: Tiles.claude, size: 20)
-                    Text(them).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                    if let time = message.time { Text(clock(time)).font(.system(size: 11)).foregroundStyle(.tertiary) }
+                HStack(spacing: 4) {
+                    Image(systemName: "sparkle").foregroundStyle(Color(hex: 0xD97757))
+                    Text(them).fontWeight(.semibold).foregroundStyle(.secondary)
+                    if let time = message.time { Text(clock(time)).monospacedDigit().foregroundStyle(.tertiary) }
                 }
-                if !message.tools.isEmpty {
-                    Button { showTools.toggle() } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "wrench.and.screwdriver").font(.system(size: 10.5))
-                            Text("\(message.tools.count) tool call\(message.tools.count == 1 ? "" : "s")")
-                            Image(systemName: showTools ? "chevron.up" : "chevron.down").font(.system(size: 9))
-                        }
-                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(Capsule().fill(Color.white.opacity(0.05)))
-                    }
-                    .buttonStyle(.plain)
-                    if showTools {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(message.tools.enumerated()), id: \.offset) { _, t in
-                                Text(t).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                        }
-                        .padding(.leading, 4)
-                    }
-                }
+                .font(.subheadline)
+                if !message.tools.isEmpty { tools }
                 if !message.text.isEmpty { Markdown(text: message.text) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var tools: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button { withAnimation(.snappy(duration: 0.2)) { showTools.toggle() } } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .rotationEffect(.degrees(showTools ? 90 : 0))
+                        .frame(width: 12)
+                    Text("Used \(message.tools.count) tool\(message.tools.count == 1 ? "" : "s")")
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(showTools ? "Hide tool calls" : "Show tool calls")
+            if showTools {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(message.tools.enumerated()), id: \.offset) { _, t in
+                        Label {
+                            Text(t).lineLimit(1).truncationMode(.middle).help(t)
+                        } icon: {
+                            Image(systemName: "wrench.and.screwdriver").foregroundStyle(.tertiary)
+                        }
+                        .font(.subheadline.monospaced())
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quinary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
         }
     }
 }
@@ -263,47 +282,51 @@ struct Markdown: View {
     @ViewBuilder private func view(_ block: Block) -> some View {
         switch block {
         case .paragraph(let t):
-            Text(Self.inline(t)).lineSpacing(3)
+            Text(Self.inline(t)).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
         case .heading(let level, let t):
-            Text(Self.inline(t)).font(level == 1 ? .title3.bold() : level == 2 ? .headline : .body.bold()).padding(.top, 4)
+            Text(Self.inline(t)).font(level == 1 ? .title2.weight(.semibold) : level == 2 ? .title3.weight(.semibold) : .headline).padding(.top, 8)
         case .bullet(let depth, let t):
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text(depth == 0 ? "•" : "◦").foregroundStyle(.secondary)
-                Text(Self.inline(t)).lineSpacing(3)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(depth == 0 ? "•" : "◦").foregroundStyle(.secondary).frame(width: 12)
+                Text(Self.inline(t)).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.leading, CGFloat(depth) * 16 + 2)
+            .padding(.leading, CGFloat(depth) * 20)
         case .numbered(let n, let depth, let t):
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(n).monospacedDigit().foregroundStyle(.secondary)
-                Text(Self.inline(t)).lineSpacing(3)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(n).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 16, alignment: .trailing)
+                Text(Self.inline(t)).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.leading, CGFloat(depth) * 16)
+            .padding(.leading, CGFloat(depth) * 20)
         case .quote(let t):
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 1.5).fill(.tertiary).frame(width: 3)
-                Text(Self.inline(t)).foregroundStyle(.secondary)
+                Text(Self.inline(t)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         case .code(let t):
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(t).font(.system(size: 12, design: .monospaced)).padding(10)
+            ScrollView(.horizontal) {
+                Text(t).font(.callout.monospaced()).lineSpacing(2).padding(12)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.quaternary))
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.quaternary))
         case .table(let rows):
-            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
                     GridRow {
                         ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-                            Text(Self.inline(cell)).fontWeight(i == 0 ? .semibold : .regular)
+                            Text(Self.inline(cell))
+                                .fontWeight(i == 0 ? .semibold : .regular)
+                                .foregroundStyle(i == 0 ? .secondary : .primary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    if i == 0 { Divider().gridCellUnsizedAxes(.horizontal) }
+                    if i < rows.count - 1 { Divider().gridCellUnsizedAxes(.horizontal) }
                 }
             }
-            .padding(10)
+            .padding(12)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.quaternary))
         case .rule:
-            Divider()
+            Divider().padding(.vertical, 4)
         }
     }
 

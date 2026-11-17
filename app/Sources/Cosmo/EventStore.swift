@@ -20,7 +20,9 @@ final class EventStore {
     var brainTranscript: String?
     var missingPermission = false
     var dictation: DictationPhase = .off
+    var dictationText = ""
     var control: ControlAction?
+    var phoneConnected = false
     var clicking = false
     @ObservationIgnored private var hostsModified: Date?
     @ObservationIgnored private var brainModified: Date?
@@ -40,7 +42,7 @@ final class EventStore {
     var doneWorkers: [Worker] { workers.filter { !$0.running }.reversed() }
 
     var headline: String {
-        if let approval { return "Should I \(approval)?" }
+        if approval != nil { return "Needs your OK" }
         switch state {
         case .offline: return starting ? "Starting Cosmo…" : "Cosmo isn’t running"
         case .listening: return "Listening"
@@ -130,6 +132,7 @@ final class EventStore {
         switch e.state {
         case "ready":
             state = .idle
+            phoneConnected = false
             starting = false
             dictation = .off
             missingPermission = false
@@ -214,14 +217,20 @@ final class EventStore {
                     if self.control?.id == action.id { self.control = nil }
                 }
             }
+        case "phone":
+            phoneConnected = d.text == "connected"
         case "permission":
             missingPermission = true
         case "dictating":
+            if d.text != "locked" { dictationText = "" }
             dictation = d.text == "locked" ? .locked : .listening
+        case "dictation_partial":
+            if dictation != .off { dictationText = d.text }
         case "dictation_working":
             dictation = .working
         case "dictation_done":
             dictation = .off
+            dictationText = ""
         case "host":
             note(.worker, d.text, time)
         case "audio_reset":

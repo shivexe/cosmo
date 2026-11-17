@@ -28,6 +28,7 @@ DEFAULTS = {
     "pronunciations_file": str(PRONUNCIATIONS),
     "end_of_speech_ms": 700,
     "hosts": {},
+    "phone_bridge": True,
 }
 
 DEFAULT_WORDS = """Claude Code

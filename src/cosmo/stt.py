@@ -45,7 +45,9 @@ class SpeechEngine:
         model.generation_config.forced_decoder_ids = None
         if cfg.get("adapter_path"):
             model = PeftModel.from_pretrained(model, str(config.path_of(cfg, "adapter_path"))).merge_and_unload()
-        self.model = model.to(self.device).eval()
+        dtype = torch.float16 if self.device == "mps" else torch.float32
+        model.get_input_embeddings().to(self.device, dtype)
+        self.model = model.to(self.device, dtype).eval()
         self.vad = load_silero_vad()
         self.lock = threading.Lock()
 
@@ -77,6 +79,6 @@ class SpeechEngine:
         for chunk in chunks:
             feats = self.processor.feature_extractor(chunk, sampling_rate=SAMPLE_RATE, return_tensors="pt").input_features
             with torch.no_grad():
-                ids = self.model.generate(input_features=feats.to(self.device), prompt_ids=prompt_ids, max_new_tokens=200, use_cache=True)
+                ids = self.model.generate(input_features=feats.to(self.device, self.model.dtype), prompt_ids=prompt_ids, max_new_tokens=200, use_cache=True)
             texts.append(self.processor.batch_decode(ids, skip_special_tokens=True)[0].strip())
         return " ".join(t for t in texts if t)

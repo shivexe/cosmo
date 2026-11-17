@@ -3,7 +3,7 @@ import os
 import signal
 import time
 
-from . import commands, config, dictation, events, hosts, mac
+from . import commands, config, dictation, events, hosts, mac, phone
 from .approvals import Approver
 from .codex_brain import make_brain
 from .ears import Ears
@@ -91,6 +91,24 @@ class Cosmo:
         self.mode = "dictate"
         self.ears.hold_start()
         events.emit("dictating")
+        self.spawn(self.dictation_live(self.ears.held))
+
+    async def dictation_live(self, held):
+        started, shown, heard = time.monotonic(), "", 0
+        while True:
+            await asyncio.sleep(dictation.LIVE_EVERY - (time.monotonic() - started) % dictation.LIVE_EVERY)
+            if self.ears.held is not held:
+                return
+            if not held or (len(held) - heard) * len(held[0]) < dictation.LIVE_GROWTH * 16000:
+                continue
+            heard = len(held)
+            try:
+                text = await asyncio.to_thread(dictation.live_text, self.engine, held, self.words, lambda: self.ears.held is held)
+            except Exception:
+                return
+            if self.ears.held is held and text and text != shown:
+                shown = text
+                events.emit("dictation_partial", text)
 
     def unlock_dictation(self):
         if self.dictation_watch is not None:
@@ -128,7 +146,7 @@ class Cosmo:
             text = await asyncio.to_thread(self.engine.transcribe, audio, self.words)
             text = dictation.clean(text, dictation.load_dictionary())
             if text:
-                await asyncio.to_thread(dictation.paste, text + " ")
+                await asyncio.to_thread(dictation.paste, text if text.endswith("\n") else text + " ")
                 events.emit("dictated", text)
         except Exception as error:
             events.emit("error", f"dictation: {error!r}")
@@ -489,6 +507,7 @@ async def run():
     cosmo.spawn(report_glitches(cosmo.ears))
     cosmo.spawn(trim_memory(cosmo))
     cosmo.spawn(hosts.watch())
+    cosmo.spawn(phone.serve(cosmo))
     events.emit("ready")
     try:
         from ApplicationServices import AXIsProcessTrusted
