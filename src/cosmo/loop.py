@@ -1,6 +1,5 @@
 import asyncio
 import time
-from collections import deque
 
 from . import config, events
 from .approvals import Approver
@@ -24,12 +23,10 @@ class Cosmo:
         self.voice = Voice(self.ears)
         self.approver = Approver(self.voice.say, self.hear_answer)
         self.brain = ClaudeBrain(self.cfg, self.approver)
-        self.helper = None
         self.last_brain = None
         self.next_uid = 0
         self.cancelled_turns = set()
         self.speakers = {}
-        self.history = deque(maxlen=16)
         self.state = "idle"
         self.turn_id = 0
         self.task = None
@@ -161,8 +158,8 @@ class Cosmo:
         self.turn_id += 1
         self.speakers.clear()
         self.voice.stop()
-        for brain in (self.brain, self.helper):
-            if brain is not None and (brain.busy or brain.taken):
+        for brain in (self.brain,):
+            if brain.busy or brain.taken:
                 self.spawn(brain.interrupt())
         events.emit("interrupted")
 
@@ -235,15 +232,7 @@ class Cosmo:
         return brain
 
     def take_free(self):
-        if self.helper is None:
-            self.helper = ClaudeBrain(self.cfg, self.approver, name="cosmo-helper")
-            self.spawn(self.announce(self.helper))
-        if self.brain.taken and self.brain.cancelled:
-            return None
-        for brain in (self.brain, self.helper):
-            if not brain.taken:
-                return self.grab(brain)
-        return None
+        return None if self.brain.taken else self.grab(self.brain)
 
     async def take(self, brain):
         while brain.taken and brain.holder is not None and not brain.holder.done():
@@ -256,7 +245,7 @@ class Cosmo:
 
     def busy(self):
         me = asyncio.current_task()
-        return any(b is not None and ((b.taken and b.holder is not me) or (b.busy and b.holder is not me)) for b in (self.brain, self.helper))
+        return (self.brain.taken or self.brain.busy) and self.brain.holder is not me
 
     async def run_turn(self, audio, at, mine, need_word=False, text=None, gate_out=None, brain=None, uid=0):
         brain = brain or self.brain
@@ -282,10 +271,6 @@ class Cosmo:
         if not command or command.lower().strip(" .,!?") in STOP_WORDS:
             return self.settle()
         text = command
-        self.history.append(f"User: {text}")
-        if brain is self.helper and len(self.history) > 1:
-            recent = "\n".join(list(self.history)[:-1])
-            text = f"(You are Cosmo's second brain; the main one is still working. Recent conversation for context:\n{recent})\n\n{text}"
         spoke = False
         stream = brain.ask(text)
         try:
@@ -297,7 +282,6 @@ class Cosmo:
                     self.speakers[uid] = (brain, asyncio.current_task())
                     self.spawn(self.report(at, mine))
                 print(f"  cosmo: {sentence}")
-                self.history.append(f"Cosmo: {sentence}")
                 self.voice.say(sentence)
                 self.settle()
         finally:
@@ -320,7 +304,6 @@ class Cosmo:
             while self.talking() or self.waiting is not None or self.state == "listening":
                 await asyncio.sleep(0.3)
             print(f"  cosmo (on its own): {sentence}")
-            self.history.append(f"Cosmo: {sentence}")
             self.voice.say(sentence)
             self.settle()
             await asyncio.to_thread(self.voice.wait)
@@ -343,5 +326,3 @@ async def run():
         await asyncio.Event().wait()
     finally:
         await cosmo.brain.close()
-        if cosmo.helper is not None:
-            await cosmo.helper.close()
