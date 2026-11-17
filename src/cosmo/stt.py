@@ -1,3 +1,5 @@
+import threading
+
 import numpy as np
 import torch
 from peft import PeftModel
@@ -44,6 +46,7 @@ class SpeechEngine:
         model = PeftModel.from_pretrained(model, str(config.path_of(cfg, "adapter_path")))
         self.model = model.merge_and_unload().to(self.device).eval()
         self.vad = load_silero_vad()
+        self.lock = threading.Lock()
 
     def has_speech(self, audio):
         return bool(get_speech_timestamps(torch.from_numpy(audio), self.vad, sampling_rate=SAMPLE_RATE, min_speech_duration_ms=MIN_SPEECH_MS))
@@ -56,6 +59,10 @@ class SpeechEngine:
         return ids.to(self.device)
 
     def transcribe(self, audio, words_file):
+        with self.lock:
+            return self._transcribe(audio, words_file)
+
+    def _transcribe(self, audio, words_file):
         audio = np.asarray(audio, dtype=np.float32)
         if audio.ndim != 1:
             raise ValueError("mono 1-D audio required")

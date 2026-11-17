@@ -7,6 +7,7 @@ name = "cosmo"
 version = "0.0.1"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "aec-audio-processing",
     "claude-agent-sdk>=0.2.182",
     "huggingface_hub",
     "kokoro>=0.9.4",
@@ -15,6 +16,7 @@ dependencies = [
     "openwakeword",
     "peft>=0.21",
     "pynput",
+    "scipy",
     "silero-vad",
     "sounddevice",
     "soundfile",

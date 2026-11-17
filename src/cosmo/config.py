@@ -10,6 +10,7 @@ DEFAULTS = {
     "voice": "af_heart",
     "speed": 1.0,
     "hotkey": "alt_r",
+    "listen_mode": "hotkey",
     "wake_words": ["hey cosmo", "cosmo"],
     "brain_model": None,
     "speech_engine": "whisper-small-lora",

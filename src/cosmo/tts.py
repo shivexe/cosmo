@@ -3,14 +3,11 @@ import re
 import threading
 
 import numpy as np
-import sounddevice as sd
 import torch
 from kokoro import KPipeline
 
 from . import config
 
-RATE = 24000
-BLOCK = RATE // 20
 SENTENCE = re.compile(r"(?<=[.!?])\s+")
 LOOKAHEAD = 2
 
@@ -31,7 +28,8 @@ def mark(text, pron):
 
 
 class Voice:
-    def __init__(self):
+    def __init__(self, ears):
+        self.ears = ears
         device = "mps" if torch.backends.mps.is_available() else "cpu"
         self.pipe = KPipeline(lang_code="a", device=device, repo_id="hexgrad/Kokoro-82M")
         self.generation = 0
@@ -63,6 +61,7 @@ class Voice:
         with self.idle:
             self.pending = 0
             self.idle.notify_all()
+        self.ears.clear()
         self.speaking.clear()
 
     def wait(self):
@@ -92,16 +91,12 @@ class Voice:
             self.ready.put((gen, audio))
 
     def _play_loop(self):
-        with sd.OutputStream(samplerate=RATE, channels=1, dtype="float32", blocksize=BLOCK) as stream:
-            while True:
-                gen, audio = self.ready.get()
+        while True:
+            gen, audio = self.ready.get()
+            if gen == self.generation:
+                self.speaking.set()
+                self.ears.play(audio)
                 if gen == self.generation:
-                    self.speaking.set()
-                    for i in range(0, len(audio), BLOCK):
-                        if gen != self.generation:
-                            break
-                        stream.write(np.ascontiguousarray(audio[i : i + BLOCK]).reshape(-1, 1))
-                    if gen == self.generation:
-                        self._done()
-                    if self.todo.empty() and self.ready.empty():
-                        self.speaking.clear()
+                    self._done()
+                if self.todo.empty() and self.ready.empty():
+                    self.speaking.clear()

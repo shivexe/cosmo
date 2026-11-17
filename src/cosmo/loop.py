@@ -1,33 +1,16 @@
 import asyncio
 import time
 
-import numpy as np
-import sounddevice as sd
-
 from . import config, events
 from .approvals import Approver
 from .brain import ClaudeBrain
+from .ears import Ears
 from .hotkey import watch
-from .stt import SAMPLE_RATE, SpeechEngine
+from .stt import SpeechEngine
 from .tts import Voice
 
 
-class Recorder:
-    def __init__(self):
-        self.blocks = None
-        self.stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", callback=self._take)
-        self.stream.start()
-
-    def _take(self, data, frames, time_info, status):
-        if self.blocks is not None:
-            self.blocks.append(data[:, 0].copy())
-
-    def start(self):
-        self.blocks = []
-
-    def stop(self):
-        blocks, self.blocks = self.blocks, None
-        return np.concatenate(blocks) if blocks else np.zeros(0, dtype=np.float32)
+STOP_WORDS = {"stop", "cancel", "quiet", "never mind", "nevermind", "be quiet", "shut up", "enough"}
 
 
 class Cosmo:
@@ -35,8 +18,8 @@ class Cosmo:
         self.cfg = config.load()
         self.words = config.path_of(self.cfg, "words_file")
         self.engine = SpeechEngine(self.cfg)
-        self.voice = Voice()
-        self.mic = Recorder()
+        self.ears = Ears(self.cfg["end_of_speech_ms"])
+        self.voice = Voice(self.ears)
         self.brain = ClaudeBrain(self.cfg, Approver(self.voice.say, self.hear_answer))
         self.state = "idle"
         self.turn_id = 0
@@ -57,17 +40,35 @@ class Cosmo:
                 self.interrupt()
             self.mode = "turn"
             self.set("listening")
-        self.mic.start()
+        self.ears.hold_start()
 
     def released(self):
         if self.mode is None:
             return
-        audio, mode, at = self.mic.stop(), self.mode, time.perf_counter()
+        audio, mode, at = self.ears.hold_stop(), self.mode, time.perf_counter()
         self.mode = None
         if mode == "answer":
             asyncio.create_task(self.finish_answer(audio))
         else:
             self.task = asyncio.create_task(self.turn(audio, at, self.task))
+
+    def always(self):
+        return self.cfg["listen_mode"] == "always" and self.mode is None
+
+    def speech_started(self):
+        if not self.always() or self.waiting is not None:
+            return
+        if self.state != "idle":
+            self.interrupt()
+        self.set("listening")
+
+    def spoke(self, audio):
+        if not self.always():
+            return
+        if self.waiting is not None and not self.waiting.done():
+            asyncio.create_task(self.finish_answer(audio))
+        else:
+            self.task = asyncio.create_task(self.turn(audio, time.perf_counter(), self.task))
 
     def interrupt(self):
         self.turn_id += 1
@@ -107,7 +108,7 @@ class Cosmo:
             return
         events.emit("heard", text)
         print(f"  you: {text or '(nothing heard)'}")
-        if not text:
+        if not text or text.lower().strip(" .,!?") in STOP_WORDS:
             return self.set("idle")
         first = True
         async for sentence in self.brain.ask(text):
@@ -127,9 +128,13 @@ class Cosmo:
 
 async def run():
     cosmo = Cosmo()
+    loop = asyncio.get_running_loop()
+    cosmo.ears.on_start = lambda: loop.call_soon_threadsafe(cosmo.speech_started)
+    cosmo.ears.on_utterance = lambda audio: loop.call_soon_threadsafe(cosmo.spoke, audio)
     watch(cosmo.cfg["hotkey"], asyncio.get_running_loop(), cosmo.pressed, cosmo.released)
     events.emit("ready")
-    print(f"ready. hold {cosmo.cfg['hotkey']} to talk, release to send, press again to interrupt. ctrl-c quits.")
+    how = "just talk" if cosmo.cfg["listen_mode"] == "always" else f"hold {cosmo.cfg['hotkey']} to talk, release to send"
+    print(f"ready. {how}; talk over Cosmo or press the key to interrupt. ctrl-c quits.")
     try:
         await asyncio.Event().wait()
     finally:
