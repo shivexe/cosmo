@@ -15,7 +15,7 @@ import torch
 from scipy.signal import resample_poly
 
 OUT = Path.home() / ".cosmo" / "wake"
-LAB = Path.home() / "cosmo" / "lab"
+LAB = Path(__file__).resolve().parent.parent / "lab"
 WISPR = LAB / "data" / "wispr"
 BASELINE = LAB / "baseline" / "me-baseline.wav"
 RATE = 16000
