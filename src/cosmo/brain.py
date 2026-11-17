@@ -20,7 +20,10 @@ VOICE_STYLE = (
     "When he asks about a task, find the session yourself: run find with the topic, check the best match with read, "
     "and only ask him if two sessions fit equally. Answer status questions from read without disturbing the session. "
     "When he gives a decision or instruction for a session, send his words with send, then wait and tell him the reply in short. "
-    "If send fails, use SendMessage with 'User says:' and his words, and ask that session to reply to your from address."
+    "If send fails, use SendMessage with 'User says:' and his words, and ask that session to reply to your from address. "
+    "Never make him wait: anything that takes more than a few seconds, such as waiting for a session's reply, a build "
+    "or a long command, runs in the background (Bash with run_in_background, or a background agent), and you answer him "
+    "right away with what you started. When it finishes you are told; then say the result in short."
 )
 END = re.compile(r"[.!?](?:\s)")
 MIN_WORDS = 3
@@ -47,9 +50,9 @@ def text_of(msg):
 
 
 class ClaudeBrain:
-    def __init__(self, cfg, approve):
-        for name in CREDENTIALS:
-            os.environ.pop(name, None)
+    def __init__(self, cfg, approve, name=NAME):
+        for variable in CREDENTIALS:
+            os.environ.pop(variable, None)
         self.client = ClaudeSDKClient(
             options=ClaudeAgentOptions(
                 include_partial_messages=True,
@@ -58,11 +61,13 @@ class ClaudeBrain:
                 can_use_tool=approve,
                 model=cfg["brain_model"],
                 cwd=os.path.expanduser("~"),
-                extra_args={"name": NAME},
+                extra_args={"name": name},
             )
         )
         self.connected = False
         self.cancelled = False
+        self.taken = False
+        self.holder = None
         self.busy = False
         self.unsolicited = False
         self.answers = asyncio.Queue()

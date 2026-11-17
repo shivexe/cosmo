@@ -34,8 +34,14 @@ def describe(tool_name, tool_input):
 class Approver:
     def __init__(self, say, listen, timeout=TIMEOUT):
         self.say, self.listen, self.timeout = say, listen, timeout
+        self.lock = None
 
     async def __call__(self, tool_name, tool_input, context):
+        self.lock = self.lock or asyncio.Lock()
+        async with self.lock:
+            return await self.ask(tool_name, tool_input)
+
+    async def ask(self, tool_name, tool_input):
         what = describe(tool_name, tool_input)
         events.emit("waiting_for_approval", what)
         question = f"Claude wants to {what}. Allow it?"

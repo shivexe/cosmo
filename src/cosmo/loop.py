@@ -21,7 +21,10 @@ class Cosmo:
         self.engine = SpeechEngine(self.cfg)
         self.ears = Ears(self.cfg["end_of_speech_ms"], self.load_wake())
         self.voice = Voice(self.ears)
-        self.brain = ClaudeBrain(self.cfg, Approver(self.voice.say, self.hear_answer))
+        self.approver = Approver(self.voice.say, self.hear_answer)
+        self.brain = ClaudeBrain(self.cfg, self.approver)
+        self.helper = None
+        self.last_brain = None
         self.state = "idle"
         self.turn_id = 0
         self.task = None
@@ -135,8 +138,9 @@ class Cosmo:
     def interrupt(self):
         self.turn_id += 1
         self.voice.stop()
-        if self.task and not self.task.done():
-            self.spawn(self.brain.interrupt())
+        for brain in (self.brain, self.helper):
+            if brain is not None and brain.busy:
+                self.spawn(brain.interrupt())
         events.emit("interrupted")
 
     async def hear_answer(self):
@@ -161,6 +165,7 @@ class Cosmo:
             print(f"  first sound {seconds:.2f}s after you let go")
 
     async def turn(self, audio, at, previous, mine, need_word=False, gate_in=None, gate_out=None):
+        brain = None
         try:
             text = None
             if previous and not previous.done() and gate_in is None:
@@ -170,15 +175,20 @@ class Cosmo:
                     self.interrupt()
                     await previous
                     return self.set("idle")
-            if previous:
-                await previous
-            if gate_in is not None and not await gate_in:
-                if self.state == "listening" and mine == self.turn_id and self.mode is None:
-                    self.set("idle")
-                return
+            if gate_in is not None:
+                if previous:
+                    await previous
+                if not await gate_in:
+                    if self.state == "listening" and mine == self.turn_id and self.mode is None:
+                        self.set("idle")
+                    return
+                brain = await self.take(self.last_brain or self.brain)
+            else:
+                brain = self.take_free() or await self.take(self.brain)
+            self.last_brain = brain
             if mine == self.turn_id:
                 self.set("thinking")
-            await self.run_turn(audio, at, mine, need_word, text, gate_out)
+            await self.run_turn(audio, at, mine, need_word, text, gate_out, brain)
         except Exception as error:
             events.emit("error", repr(error))
             print(f"  error: {error!r}")
@@ -189,12 +199,39 @@ class Cosmo:
             if gate_out is not None and not gate_out.done():
                 gate_out.set_result(False)
             self.end_pending(gate_out)
+            self.release(brain)
 
     def end_pending(self, gate):
         if gate is not None and self.gate is gate and self.arm_reason == "pending":
             self.armed_at = self.arm_reason = None
 
-    async def run_turn(self, audio, at, mine, need_word=False, text=None, gate_out=None):
+    def grab(self, brain):
+        brain.taken, brain.holder = True, asyncio.current_task()
+        return brain
+
+    def take_free(self):
+        if self.helper is None:
+            self.helper = ClaudeBrain(self.cfg, self.approver, name="cosmo-helper")
+            self.spawn(self.announce(self.helper))
+        for brain in (self.brain, self.helper):
+            if not brain.taken:
+                return self.grab(brain)
+        return None
+
+    async def take(self, brain):
+        while brain.taken:
+            await asyncio.shield(brain.holder)
+        return self.grab(brain)
+
+    def release(self, brain):
+        if brain is not None and brain.holder is asyncio.current_task():
+            brain.taken = False
+
+    def busy(self):
+        return any(b is not None and (b.taken or b.busy) for b in (self.brain, self.helper))
+
+    async def run_turn(self, audio, at, mine, need_word=False, text=None, gate_out=None, brain=None):
+        brain = brain or self.brain
         if text is None:
             text = await asyncio.to_thread(self.engine.transcribe, audio, self.words)
         if mine != self.turn_id:
@@ -217,24 +254,27 @@ class Cosmo:
         if not command or command.lower().strip(" .,!?") in STOP_WORDS:
             return self.set("idle")
         text = command
-        first = True
-        async for sentence in self.brain.ask(text):
-            if mine != self.turn_id:
-                continue
-            if first:
-                first = False
-                self.set("speaking")
-                self.spawn(self.report(at, mine))
-            print(f"  cosmo: {sentence}")
-            self.voice.say(sentence)
+        spoke = False
+        try:
+            async for sentence in brain.ask(text):
+                if mine != self.turn_id:
+                    continue
+                if not spoke:
+                    spoke = True
+                    self.set("speaking")
+                    self.spawn(self.report(at, mine))
+                print(f"  cosmo: {sentence}")
+                self.voice.say(sentence)
+        finally:
+            self.release(brain)
         if mine == self.turn_id:
-            await asyncio.to_thread(self.voice.wait)
-            if mine == self.turn_id:
+            if spoke:
+                await asyncio.to_thread(self.voice.wait)
+            if mine == self.turn_id and not self.busy():
                 self.set("idle")
 
-
-    async def announce(self):
-        async for sentence in self.brain.announcements():
+    async def announce(self, brain):
+        async for sentence in brain.announcements():
             while self.state != "idle":
                 await asyncio.sleep(0.3)
             print(f"  cosmo (on its own): {sentence}")
@@ -252,7 +292,7 @@ async def run():
     cosmo.ears.on_utterance = lambda audio: loop.call_soon_threadsafe(cosmo.spoke, audio)
     cosmo.ears.on_wake = lambda: loop.call_soon_threadsafe(cosmo.woke)
     watch(cosmo.cfg["hotkey"], asyncio.get_running_loop(), cosmo.pressed, cosmo.released)
-    cosmo.spawn(cosmo.announce())
+    cosmo.spawn(cosmo.announce(cosmo.brain))
     events.emit("ready")
     how = {"always": "just talk", "wake": "say hey cosmo"}.get(cosmo.cfg["listen_mode"], f"hold {cosmo.cfg['hotkey']} to talk, release to send")
     print(f"ready. {how}; talk over Cosmo or press the key to interrupt. ctrl-c quits.")
@@ -260,3 +300,5 @@ async def run():
         await asyncio.Event().wait()
     finally:
         await cosmo.brain.close()
+        if cosmo.helper is not None:
+            await cosmo.helper.close()
