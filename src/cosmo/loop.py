@@ -33,7 +33,6 @@ class Cosmo:
         self.armed_at = None
         self.arm_reason = None
         self.gate = None
-        self.answered_at = 0.0
         self.background = set()
 
     def spawn(self, coro):
@@ -51,7 +50,7 @@ class Cosmo:
             self.voice.stop()
             self.mode = "answer"
         else:
-            if self.state != "idle":
+            if self.state == "speaking":
                 self.interrupt()
             self.mode = "turn"
             self.set("listening")
@@ -103,8 +102,7 @@ class Cosmo:
     def speech_started(self):
         if not self.always() or self.waiting is not None:
             return
-        just_answered = time.monotonic() - self.answered_at < 3
-        if self.state == "speaking" or (self.cfg["listen_mode"] == "always" and self.state == "thinking" and not just_answered):
+        if self.state == "speaking":
             self.interrupt()
             self.armed_at = time.monotonic()
             self.arm_reason = "talk"
@@ -117,7 +115,6 @@ class Cosmo:
             return
         if self.waiting is not None and not self.waiting.done():
             self.armed_at = self.arm_reason = None
-            self.answered_at = time.monotonic()
             self.spawn(self.finish_answer(audio))
         elif not self.armed(len(audio) / 16000):
             if self.state == "listening":
@@ -168,12 +165,11 @@ class Cosmo:
         brain = None
         try:
             text = None
-            if previous and not previous.done() and gate_in is None:
+            if gate_in is None and (self.busy() or (previous and not previous.done())):
                 text = await asyncio.to_thread(self.engine.transcribe, audio, self.words)
                 if (not need_word or said_wake_word(text)) and strip(text).lower().strip(" .,!?") in STOP_WORDS:
                     events.emit("heard", text)
                     self.interrupt()
-                    await previous
                     return self.set("idle")
             if gate_in is not None:
                 if previous:
@@ -213,13 +209,15 @@ class Cosmo:
         if self.helper is None:
             self.helper = ClaudeBrain(self.cfg, self.approver, name="cosmo-helper")
             self.spawn(self.announce(self.helper))
+        if self.brain.taken and self.brain.cancelled:
+            return None
         for brain in (self.brain, self.helper):
             if not brain.taken:
                 return self.grab(brain)
         return None
 
     async def take(self, brain):
-        while brain.taken:
+        while brain.taken and brain.holder is not None and not brain.holder.done():
             await asyncio.shield(brain.holder)
         return self.grab(brain)
 
@@ -255,8 +253,9 @@ class Cosmo:
             return self.set("idle")
         text = command
         spoke = False
+        stream = brain.ask(text)
         try:
-            async for sentence in brain.ask(text):
+            async for sentence in stream:
                 if mine != self.turn_id:
                     continue
                 if not spoke:
@@ -266,23 +265,27 @@ class Cosmo:
                 print(f"  cosmo: {sentence}")
                 self.voice.say(sentence)
         finally:
+            await stream.aclose()
             self.release(brain)
         if mine == self.turn_id:
             if spoke:
                 await asyncio.to_thread(self.voice.wait)
-            if mine == self.turn_id and not self.busy():
-                self.set("idle")
+            if mine == self.turn_id:
+                self.settle()
+
+    def settle(self):
+        self.set("thinking" if self.busy() else "idle")
 
     async def announce(self, brain):
         async for sentence in brain.announcements():
-            while self.state != "idle":
+            while self.state not in ("idle", "thinking"):
                 await asyncio.sleep(0.3)
             print(f"  cosmo (on its own): {sentence}")
             self.set("speaking")
             self.voice.say(sentence)
             await asyncio.to_thread(self.voice.wait)
             if self.state == "speaking":
-                self.set("idle")
+                self.settle()
 
 
 async def run():
