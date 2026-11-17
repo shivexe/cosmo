@@ -6,7 +6,7 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from . import events
 
 YES = {"yes", "yeah", "yep", "yup", "sure", "okay", "ok", "approve", "approved", "allow", "go ahead", "do it", "proceed"}
-NO = {"no", "nope", "nah", "stop", "cancel", "deny", "don't", "do not", "never"}
+NO = {"no", "not", "nope", "nah", "stop", "cancel", "deny", "don't", "do not", "never"}
 TIMEOUT = 30
 MAX_READ = 200
 

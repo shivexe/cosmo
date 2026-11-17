@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 
@@ -21,6 +22,13 @@ def take_sentences(buffer):
             return out, buffer
 
 
+def text_of(msg):
+    delta = msg.event.get("delta") or {} if isinstance(msg, StreamEvent) else {}
+    if isinstance(msg, StreamEvent) and msg.event.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
+        return delta["text"]
+    return None
+
+
 class ClaudeBrain:
     def __init__(self, cfg, approve):
         for name in CREDENTIALS:
@@ -37,25 +45,68 @@ class ClaudeBrain:
         )
         self.connected = False
         self.cancelled = False
+        self.busy = False
+        self.unsolicited = False
+        self.answers = asyncio.Queue()
+        self.extras = asyncio.Queue()
+        self.reader = None
+
+    async def _read(self):
+        async for msg in self.client.receive_messages():
+            if not self.busy and not self.unsolicited:
+                self.unsolicited = True
+            to_extras = self.unsolicited
+            if isinstance(msg, ResultMessage):
+                self.unsolicited = False
+            (self.extras if to_extras else self.answers).put_nowait(msg)
+
+    async def _connect(self):
+        await self.client.connect()
+        self.connected = True
+        self.reader = asyncio.create_task(self._read())
 
     async def ask(self, text):
         if not self.connected:
-            await self.client.connect()
-            self.connected = True
+            await self._connect()
         self.cancelled = False
-        await self.client.query(text)
-        buffer = ""
-        async for msg in self.client.receive_response():
-            if self.cancelled:
-                continue
-            if isinstance(msg, StreamEvent):
-                delta = msg.event.get("delta") or {}
-                if msg.event.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
-                    sentences, buffer = take_sentences(buffer + delta["text"])
+        self.busy = True
+        finished = False
+        try:
+            await self.client.query(text)
+            buffer = ""
+            while True:
+                msg = await self.answers.get()
+                if isinstance(msg, ResultMessage):
+                    finished = True
+                    if buffer.strip() and not self.cancelled:
+                        yield buffer.strip()
+                    return
+                piece = text_of(msg)
+                if piece is not None and not self.cancelled:
+                    sentences, buffer = take_sentences(buffer + piece)
                     for s in sentences:
                         yield s
-            elif isinstance(msg, ResultMessage) and buffer.strip():
-                yield buffer.strip()
+        finally:
+            if not finished:
+                await self.client.interrupt()
+                while not isinstance(await self.answers.get(), ResultMessage):
+                    pass
+            self.busy = False
+
+    async def announcements(self):
+        buffer = ""
+        while True:
+            msg = await self.extras.get()
+            if isinstance(msg, ResultMessage):
+                if buffer.strip():
+                    yield buffer.strip()
+                buffer = ""
+                continue
+            piece = text_of(msg)
+            if piece is not None:
+                sentences, buffer = take_sentences(buffer + piece)
+                for s in sentences:
+                    yield s
 
     async def interrupt(self):
         self.cancelled = True
@@ -64,5 +115,6 @@ class ClaudeBrain:
 
     async def close(self):
         if self.connected:
+            self.reader.cancel()
             await self.client.disconnect()
             self.connected = False

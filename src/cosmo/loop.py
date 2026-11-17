@@ -26,6 +26,13 @@ class Cosmo:
         self.task = None
         self.mode = None
         self.waiting = None
+        self.background = set()
+
+    def spawn(self, coro):
+        task = asyncio.create_task(coro)
+        self.background.add(task)
+        task.add_done_callback(self.background.discard)
+        return task
 
     def set(self, state, detail=""):
         self.state = state
@@ -48,9 +55,9 @@ class Cosmo:
         audio, mode, at = self.ears.hold_stop(), self.mode, time.perf_counter()
         self.mode = None
         if mode == "answer":
-            asyncio.create_task(self.finish_answer(audio))
+            self.spawn(self.finish_answer(audio))
         else:
-            self.task = asyncio.create_task(self.turn(audio, at, self.task))
+            self.task = asyncio.create_task(self.turn(audio, at, self.task, self.turn_id))
 
     def always(self):
         return self.cfg["listen_mode"] == "always" and self.mode is None
@@ -66,15 +73,15 @@ class Cosmo:
         if not self.always():
             return
         if self.waiting is not None and not self.waiting.done():
-            asyncio.create_task(self.finish_answer(audio))
+            self.spawn(self.finish_answer(audio))
         else:
-            self.task = asyncio.create_task(self.turn(audio, time.perf_counter(), self.task))
+            self.task = asyncio.create_task(self.turn(audio, time.perf_counter(), self.task, self.turn_id))
 
     def interrupt(self):
         self.turn_id += 1
         self.voice.stop()
         if self.task and not self.task.done():
-            asyncio.create_task(self.brain.interrupt())
+            self.spawn(self.brain.interrupt())
         events.emit("interrupted")
 
     async def hear_answer(self):
@@ -98,11 +105,20 @@ class Cosmo:
             events.emit("first_sound", f"{seconds:.2f}s")
             print(f"  first sound {seconds:.2f}s after you let go")
 
-    async def turn(self, audio, at, previous):
+    async def turn(self, audio, at, previous, mine):
         self.set("thinking")
         if previous:
             await previous
-        mine = self.turn_id
+        try:
+            await self.run_turn(audio, at, mine)
+        except Exception as error:
+            events.emit("error", repr(error))
+            print(f"  error: {error!r}")
+            self.voice.stop()
+            if mine == self.turn_id:
+                self.set("idle")
+
+    async def run_turn(self, audio, at, mine):
         text = await asyncio.to_thread(self.engine.transcribe, audio, self.words)
         if mine != self.turn_id:
             return
@@ -117,12 +133,24 @@ class Cosmo:
             if first:
                 first = False
                 self.set("speaking")
-                asyncio.create_task(self.report(at, mine))
+                self.spawn(self.report(at, mine))
             print(f"  cosmo: {sentence}")
             self.voice.say(sentence)
         if mine == self.turn_id:
             await asyncio.to_thread(self.voice.wait)
             if mine == self.turn_id:
+                self.set("idle")
+
+
+    async def announce(self):
+        async for sentence in self.brain.announcements():
+            while self.state != "idle":
+                await asyncio.sleep(0.3)
+            print(f"  cosmo (on its own): {sentence}")
+            self.set("speaking")
+            self.voice.say(sentence)
+            await asyncio.to_thread(self.voice.wait)
+            if self.state == "speaking":
                 self.set("idle")
 
 
@@ -132,6 +160,7 @@ async def run():
     cosmo.ears.on_start = lambda: loop.call_soon_threadsafe(cosmo.speech_started)
     cosmo.ears.on_utterance = lambda audio: loop.call_soon_threadsafe(cosmo.spoke, audio)
     watch(cosmo.cfg["hotkey"], asyncio.get_running_loop(), cosmo.pressed, cosmo.released)
+    cosmo.spawn(cosmo.announce())
     events.emit("ready")
     how = "just talk" if cosmo.cfg["listen_mode"] == "always" else f"hold {cosmo.cfg['hotkey']} to talk, release to send"
     print(f"ready. {how}; talk over Cosmo or press the key to interrupt. ctrl-c quits.")

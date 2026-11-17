@@ -14,7 +14,11 @@ LOOKAHEAD = 2
 
 def load_pronunciations(path):
     pron = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return pron
+    for line in lines:
         word, _, ipa = line.partition("\t")
         if word.strip() and ipa.strip():
             pron[word.strip()] = ipa.strip()
@@ -74,7 +78,7 @@ class Voice:
 
     def _done(self):
         with self.idle:
-            self.pending -= 1
+            self.pending = max(0, self.pending - 1)
             self.idle.notify_all()
 
     def _synth_loop(self):
@@ -95,7 +99,7 @@ class Voice:
             gen, audio = self.ready.get()
             if gen == self.generation:
                 self.speaking.set()
-                self.ears.play(audio)
+                self.ears.play(audio, lambda: gen == self.generation)
                 if gen == self.generation:
                     self._done()
                 if self.todo.empty() and self.ready.empty():

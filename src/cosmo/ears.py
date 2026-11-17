@@ -10,6 +10,8 @@ from aec_audio_processing import AudioProcessor
 from scipy.signal import resample_poly
 from silero_vad import VADIterator, load_silero_vad
 
+from . import events
+
 RATE = 16000
 FRAME = 160
 VAD_FRAME = 512
@@ -43,10 +45,12 @@ class Ears:
     def warm(self):
         return self.played >= WARMUP_SECONDS
 
-    def play(self, audio):
+    def play(self, audio, still_wanted=lambda: True):
         done = threading.Event()
         samples = resample_poly(audio, 2, 3).astype(np.float32)
         with self.lock:
+            if not still_wanted():
+                return
             self.playing.append([samples, 0, done])
         done.wait()
 
@@ -80,8 +84,9 @@ class Ears:
         outdata[:, 0] = out
         self.aec.process_reverse_stream((out * 32767).astype(np.int16).tobytes())
         clean = np.frombuffer(self.aec.process_stream((indata[:, 0] * 32767).astype(np.int16).tobytes()), dtype=np.int16).astype(np.float32) / 32767
-        if self.held is not None:
-            self.held.append(clean)
+        held = self.held
+        if held is not None:
+            held.append(clean)
         self.frames.put(clean)
 
     def _listen(self):
@@ -92,19 +97,24 @@ class Ears:
             pending = np.concatenate([pending, self.frames.get()])
             while len(pending) >= VAD_FRAME:
                 frame, pending = pending[:VAD_FRAME], pending[VAD_FRAME:]
-                event = vad(torch.from_numpy(frame))
-                if speaking:
-                    utterance.append(frame)
-                else:
-                    pre.append(frame)
-                if event and "start" in event and not speaking:
-                    speaking = True
-                    guarded = self.is_playing() and not self.warm()
-                    utterance = list(pre)
-                    if not guarded:
-                        self.on_start()
-                if event and "end" in event and speaking:
-                    speaking = False
-                    if not guarded:
-                        self.on_utterance(np.concatenate(utterance))
-                    utterance = []
+                try:
+                    event = vad(torch.from_numpy(frame))
+                    if speaking:
+                        utterance.append(frame)
+                    else:
+                        pre.append(frame)
+                    if event and "start" in event and not speaking:
+                        speaking = True
+                        guarded = self.is_playing() and not self.warm()
+                        utterance = list(pre)
+                        if not guarded:
+                            self.on_start()
+                    if event and "end" in event and speaking:
+                        speaking = False
+                        if not guarded:
+                            self.on_utterance(np.concatenate(utterance))
+                        utterance = []
+                except Exception as error:
+                    events.emit("error", f"listening: {error!r}")
+                    vad.reset_states()
+                    speaking, utterance = False, []

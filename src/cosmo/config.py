@@ -51,11 +51,14 @@ def load():
             path.write_text(text, encoding="utf-8")
     try:
         user = json.loads(CONFIG.read_text(encoding="utf-8"))
+        readable = isinstance(user, dict)
     except (OSError, ValueError):
-        user = {}
-    merged = {**DEFAULTS, **(user if isinstance(user, dict) else {})}
-    if isinstance(user, dict) and merged.keys() != user.keys():
-        CONFIG.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        user, readable = {}, False
+    merged = {**DEFAULTS, **(user if readable else {})}
+    if readable and merged.keys() != user.keys():
+        temp = CONFIG.with_suffix(".tmp")
+        temp.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        temp.replace(CONFIG)
     return merged
 
 
