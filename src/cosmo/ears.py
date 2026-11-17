@@ -20,7 +20,9 @@ WARMUP_SECONDS = 3.0
 
 
 class Ears:
-    def __init__(self, end_of_speech_ms):
+    def __init__(self, end_of_speech_ms, wake=None):
+        self.wake = wake
+        self.on_wake = lambda: None
         self.aec = AudioProcessor(enable_aec=True, enable_ns=False, enable_agc=False, enable_vad=False)
         self.aec.set_stream_format(RATE, 1)
         self.aec.set_reverse_stream_format(RATE, 1)
@@ -94,7 +96,14 @@ class Ears:
         pending = np.zeros(0, dtype=np.float32)
         pre, utterance, speaking, guarded = deque(maxlen=PRE_ROLL), [], False, False
         while True:
-            pending = np.concatenate([pending, self.frames.get()])
+            incoming = self.frames.get()
+            if self.wake is not None:
+                try:
+                    if self.wake.feed(incoming) and not self.is_playing():
+                        self.on_wake()
+                except Exception as error:
+                    events.emit("error", f"wake: {error!r}")
+            pending = np.concatenate([pending, incoming])
             while len(pending) >= VAD_FRAME:
                 frame, pending = pending[:VAD_FRAME], pending[VAD_FRAME:]
                 try:

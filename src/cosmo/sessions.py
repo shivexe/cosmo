@@ -13,12 +13,16 @@ TAIL_BYTES = 2_000_000
 SHORT = 160
 
 
-def alive(pid):
+STOP = {"what", "whats", "status", "this", "that", "with", "from", "have", "about", "task", "session", "working", "work", "the", "and", "for"}
+
+
+def alive(info):
     try:
-        os.kill(pid, 0)
-        return True
+        os.kill(info.get("pid", -1), 0)
     except OSError:
         return False
+    started = subprocess.run(["ps", "-o", "lstart=", "-p", str(info["pid"])], capture_output=True, text=True, env={**os.environ, "TZ": "UTC"}).stdout
+    return " ".join(started.split()) == " ".join(str(info.get("procStart", "")).split())
 
 
 def transcript(info):
@@ -33,7 +37,7 @@ def live():
             info = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
-        if info.get("kind") == "interactive" and alive(info.get("pid", -1)):
+        if info.get("kind") == "interactive" and alive(info):
             out.append(info)
     return out
 
@@ -113,10 +117,11 @@ def cmd_list(_):
 
 
 def cmd_find(args):
-    terms = [t.lower() for t in args if len(t) > 2]
+    terms = [t for t in re.findall(r"[a-z0-9#-]+", " ".join(args).lower()) if len(t) > 2 and t not in STOP]
     scored = []
     for info in live():
-        blob = json.dumps(entries(info)).lower() + first_prompt(info).lower()
+        rows = entries(info)
+        blob = " ".join(texts(rows, "user") + texts(rows, "assistant") + [first_prompt(info)]).lower()
         score = sum(blob.count(t) for t in terms)
         if score:
             scored.append((score, info))
@@ -144,8 +149,10 @@ def surface(info):
 
 def cmd_send(args):
     info = find_one(args[0])
+    text = (" ".join(args[1:]) or sys.stdin.read()).strip().lstrip("!/ ").strip()
+    if not text:
+        raise SystemExit("not sent: no text")
     where = surface(info)
-    text = " ".join(args[1:])
     result = subprocess.run(
         [CMUX, "paste", "--workspace", where.get("CMUX_WORKSPACE_ID", ""), "--surface", where["CMUX_SURFACE_ID"], "--submit", "--", text],
         capture_output=True,
@@ -158,18 +165,18 @@ def cmd_send(args):
 
 def cmd_wait(args):
     info = find_one(args[0])
-    deadline = time.time() + float(args[1] if len(args) > 1 else 600)
+    deadline = time.time() + float(args[1] if len(args) > 1 else 100)
     path = SESSIONS / f"{info['pid']}.json"
-    time.sleep(3)
+    since = info.get("statusUpdatedAt", 0)
     while time.time() < deadline:
-        try:
-            status = json.loads(path.read_text()).get("status")
-        except (OSError, ValueError):
-            status = None
-        if status == "idle":
-            return cmd_read([args[0], "1"])
         time.sleep(3)
-    print(f"{info['name']} is still working after the wait")
+        try:
+            now = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if now.get("status") == "idle" and now.get("statusUpdatedAt", 0) > since:
+            return cmd_read([args[0], "1"])
+    print(f"{info['name']} is still working; run wait again")
 
 
 COMMANDS = {"list": cmd_list, "find": cmd_find, "read": cmd_read, "send": cmd_send, "wait": cmd_wait}
