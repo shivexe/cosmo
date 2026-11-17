@@ -53,7 +53,10 @@ def load():
         user = json.loads(CONFIG.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         user = {}
-    return {**DEFAULTS, **(user if isinstance(user, dict) else {})}
+    merged = {**DEFAULTS, **(user if isinstance(user, dict) else {})}
+    if isinstance(user, dict) and merged.keys() != user.keys():
+        CONFIG.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+    return merged
 
 
 def path_of(cfg, key):
