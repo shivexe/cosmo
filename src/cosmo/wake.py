@@ -29,14 +29,14 @@ class Wake:
         self.pending = np.zeros(0, dtype=np.float32)
         self.last = 0.0
 
-    def feed(self, frame):
+    def feed(self, frame, allowed=True):
         self.pending = np.concatenate([self.pending, frame])
         fired = False
         while len(self.pending) >= CHUNK:
             chunk, self.pending = self.pending[:CHUNK], self.pending[CHUNK:]
             score = self.model.predict((np.clip(chunk, -1, 1) * 32767).astype(np.int16))[self.name]
             now = time.monotonic()
-            if score >= self.threshold and now - self.last > REFRACTORY:
+            if allowed and score >= self.threshold and now - self.last > REFRACTORY:
                 self.last = now
                 fired = True
         return fired

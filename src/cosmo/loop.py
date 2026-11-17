@@ -30,6 +30,7 @@ class Cosmo:
         self.armed_at = None
         self.arm_reason = None
         self.gate = None
+        self.answered_at = 0.0
         self.background = set()
 
     def spawn(self, coro):
@@ -99,7 +100,8 @@ class Cosmo:
     def speech_started(self):
         if not self.always() or self.waiting is not None:
             return
-        if self.state == "speaking" or (self.cfg["listen_mode"] == "always" and self.state == "thinking"):
+        just_answered = time.monotonic() - self.answered_at < 3
+        if self.state == "speaking" or (self.cfg["listen_mode"] == "always" and self.state == "thinking" and not just_answered):
             self.interrupt()
             self.armed_at = time.monotonic()
             self.arm_reason = "talk"
@@ -112,6 +114,7 @@ class Cosmo:
             return
         if self.waiting is not None and not self.waiting.done():
             self.armed_at = self.arm_reason = None
+            self.answered_at = time.monotonic()
             self.spawn(self.finish_answer(audio))
         elif not self.armed(len(audio) / 16000):
             if self.state == "listening":
@@ -160,7 +163,7 @@ class Cosmo:
     async def turn(self, audio, at, previous, mine, need_word=False, gate_in=None, gate_out=None):
         try:
             text = None
-            if previous and not previous.done():
+            if previous and not previous.done() and gate_in is None:
                 text = await asyncio.to_thread(self.engine.transcribe, audio, self.words)
                 if (not need_word or said_wake_word(text)) and strip(text).lower().strip(" .,!?") in STOP_WORDS:
                     events.emit("heard", text)
@@ -170,6 +173,8 @@ class Cosmo:
             if previous:
                 await previous
             if gate_in is not None and not await gate_in:
+                if self.state == "listening":
+                    self.set("idle")
                 return
             if mine == self.turn_id:
                 self.set("thinking")
@@ -183,6 +188,11 @@ class Cosmo:
         finally:
             if gate_out is not None and not gate_out.done():
                 gate_out.set_result(False)
+            self.end_pending(gate_out)
+
+    def end_pending(self, gate):
+        if gate is not None and self.gate is gate and self.arm_reason == "pending":
+            self.armed_at = self.arm_reason = None
 
     async def run_turn(self, audio, at, mine, need_word=False, text=None, gate_out=None):
         if text is None:
@@ -193,8 +203,7 @@ class Cosmo:
         print(f"  you: {text or '(nothing heard)'}")
         if need_word and not said_wake_word(text):
             events.emit("wake_not_confirmed", text)
-            if self.arm_reason == "pending":
-                self.armed_at = self.arm_reason = None
+            self.end_pending(gate_out)
             return self.set("idle")
         if gate_out is not None:
             gate_out.set_result(True)
@@ -204,8 +213,7 @@ class Cosmo:
             self.arm_reason = "confirmed"
             self.spawn(self.calm_down(self.armed_at))
             return self.set("listening" if self.cfg["listen_mode"] == "wake" else "idle")
-        if self.arm_reason == "pending":
-            self.armed_at = self.arm_reason = None
+        self.end_pending(gate_out)
         if not command or command.lower().strip(" .,!?") in STOP_WORDS:
             return self.set("idle")
         text = command

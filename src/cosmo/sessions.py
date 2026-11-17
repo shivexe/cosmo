@@ -170,7 +170,10 @@ def cmd_send(args):
     except (OSError, ValueError):
         sent = {}
     sent[str(info["pid"])] = time.time() * 1000
-    SENT.write_text(json.dumps(sent))
+    SENT.parent.mkdir(exist_ok=True)
+    temp = SENT.with_suffix(".tmp")
+    temp.write_text(json.dumps(sent))
+    temp.replace(SENT)
     print(f"typed into {info['name']} as User: {text}")
 
 

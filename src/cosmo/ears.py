@@ -93,17 +93,17 @@ class Ears:
         held = self.held
         if held is not None:
             held.append(clean)
-        self.frames.put(clean)
+        self.frames.put((time.monotonic() - self.last_sound > ECHO_TAIL, clean))
 
     def _listen(self):
         vad = VADIterator(self.model, threshold=0.5, sampling_rate=RATE, min_silence_duration_ms=self.end_ms)
         pending = np.zeros(0, dtype=np.float32)
         pre, utterance, speaking, guarded = deque(maxlen=PRE_ROLL), [], False, False
         while True:
-            incoming = self.frames.get()
+            quiet, incoming = self.frames.get()
             if self.wake is not None:
                 try:
-                    if self.wake.feed(incoming) and time.monotonic() - self.last_sound > ECHO_TAIL:
+                    if self.wake.feed(incoming, quiet):
                         self.on_wake()
                 except Exception as error:
                     events.emit("error", f"wake: {error!r}")
