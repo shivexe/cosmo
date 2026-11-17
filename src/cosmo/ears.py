@@ -39,6 +39,8 @@ class Ears:
         self.reverse = queue.Queue()
         self.refs = self.fed = 0
         self.captured = self.cleaned = 0
+        self.recent = deque(maxlen=RATE // FRAME)
+        self.recent_lock = threading.Lock()
         self.on_start = lambda: None
         self.on_utterance = lambda audio: None
         self.model = load_silero_vad()
@@ -124,8 +126,14 @@ class Ears:
         clean = np.frombuffer(processed, dtype=np.int16).astype(np.float32) / 32767
         if held is not None:
             held.append(clean)
+        with self.recent_lock:
+            self.recent.append(clean)
         self.cleaned += 1
         return clean
+
+    def last_second(self):
+        with self.recent_lock:
+            return np.concatenate(self.recent) if self.recent else np.zeros(0, dtype=np.float32)
 
     def _listen(self):
         vad = VADIterator(self.model, threshold=0.5, sampling_rate=RATE, min_silence_duration_ms=self.end_ms)

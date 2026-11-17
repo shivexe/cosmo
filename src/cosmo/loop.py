@@ -39,6 +39,7 @@ class Cosmo:
         self.armed_at = None
         self.arm_reason = None
         self.gate = None
+        self.barge = None
         self.background = set()
 
     def spawn(self, coro):
@@ -111,21 +112,47 @@ class Cosmo:
         if not self.always() or self.waiting is not None:
             return
         if self.voice_busy():
-            self.talk_over()
-            self.armed_at = time.monotonic()
-            self.arm_reason = "talk"
-            self.set("listening")
+            self.barge = self.spawn(self.early_barge())
         elif self.armed() and self.state == "idle":
             self.set("listening")
+
+    def can_barge(self):
+        return self.always() and self.waiting is None
+
+    async def early_barge(self):
+        await asyncio.sleep(1.0)
+        if not (self.voice_busy() and self.can_barge()):
+            return
+        if self.voice_id is None or await asyncio.to_thread(self.voice_id.is_me, self.ears.last_second()):
+            if self.voice_busy() and self.can_barge():
+                self.take_floor()
+
+    def take_floor(self):
+        if self.voice_busy():
+            self.talk_over()
+        self.armed_at = time.monotonic()
+        self.arm_reason = "talk"
+        self.set("listening")
+
+    async def late_barge(self, audio):
+        if await self.is_me(audio) and self.can_barge():
+            self.take_floor()
+            self.spoke(audio)
 
     def spoke(self, audio):
         if not self.always():
             return
+        early, self.barge = self.barge, None
+        if early is not None and not early.done():
+            early.cancel()
+        overlapped = time.monotonic() - len(audio) / 16000 < self.ears.last_sound
         if self.waiting is not None and not self.waiting.done():
             if time.monotonic() - len(audio) / 16000 < self.ears.last_sound + 0.3:
                 return
             self.armed_at = self.arm_reason = None
             self.spawn(self.finish_answer(audio, check_voice=True))
+        elif overlapped and not (self.arm_reason == "talk" and self.armed(len(audio) / 16000)):
+            self.spawn(self.late_barge(audio))
         elif not self.armed(len(audio) / 16000):
             if self.state == "listening":
                 self.set("idle")
@@ -138,7 +165,7 @@ class Cosmo:
             elif self.cfg["listen_mode"] == "wake" and self.arm_reason == "pending":
                 gate_in, self.armed_at = self.gate, None
             else:
-                self.armed_at = None
+                self.armed_at = self.arm_reason = None
             turn = self.turn(audio, time.perf_counter(), self.task, self.turn_id, need_word, gate_in, gate_out, check_voice=True)
             self.task = asyncio.create_task(turn)
 
