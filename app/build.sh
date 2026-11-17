@@ -29,3 +29,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 codesign --force --sign - "$APP"
 echo "built $(pwd)/$APP"
+if [ "$1" = "--install" ]; then
+  rm -rf /Applications/Cosmo.app
+  ditto "$APP" /Applications/Cosmo.app
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Cosmo.app
+  echo "installed /Applications/Cosmo.app"
+fi
