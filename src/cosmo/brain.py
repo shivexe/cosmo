@@ -1,13 +1,24 @@
 import asyncio
 import os
 import re
+import sys
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, StreamEvent
 
 CREDENTIALS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL")
+SESSIONS = f"{sys.executable} -m cosmo.sessions"
 VOICE_STYLE = (
-    "You are being spoken aloud. Answer in short plain sentences, no markdown, no code blocks. "
-    "When you pass the user's decision to another session, start with 'User says:' and quote his words."
+    "You are Cosmo, the user's voice agent, and you are spoken aloud. Answer in short plain sentences, "
+    "no markdown, no code blocks. You also manage his other Claude Code sessions so he only talks to you. "
+    f"Use these shell commands: `{SESSIONS} list` shows the live sessions and what each works on; "
+    f"`{SESSIONS} find <words>` ranks sessions by how much they mention a topic, such as a ticket, PR number or feature; "
+    f"`{SESSIONS} read <name> [n]` gives a session's last n replies; "
+    f"`{SESSIONS} send <name> <text>` types text into that session as the user, as if he typed it there; "
+    f"`{SESSIONS} wait <name> [seconds]` waits until it is idle and prints its reply. "
+    "When he asks about a task, find the session yourself: run find with the topic, check the best match with read, "
+    "and only ask him if two sessions fit equally. Answer status questions from read without disturbing the session. "
+    "When he gives a decision or instruction for a session, send his words with send, then wait and tell him the reply in short. "
+    "If send fails, use SendMessage with 'User says:' and his words, and ask that session to reply to your from address."
 )
 END = re.compile(r"[.!?](?:\s)")
 MIN_WORDS = 3
