@@ -8,3 +8,5 @@ lab/baseline/results/
 lab/finetune/runs/
 .archify/
 tickets/
+*.egg-info/
+spikes/

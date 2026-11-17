@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosmo"
+version = "0.0.1"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "claude-agent-sdk>=0.2.182",
+    "huggingface_hub",
+    "kokoro>=0.9.4",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "numpy",
+    "openwakeword",
+    "peft>=0.21",
+    "pynput",
+    "silero-vad",
+    "sounddevice",
+    "soundfile",
+    "torch>=2.15",
+    "transformers>=5.23",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
