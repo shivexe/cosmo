@@ -18,6 +18,7 @@ dependencies = [
     "pynput",
     "scipy",
     "silero-vad",
+    "speechbrain",
     "sounddevice",
     "soundfile",
     "torch>=2.15",

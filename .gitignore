@@ -10,3 +10,5 @@ lab/finetune/runs/
 tickets/
 *.egg-info/
 spikes/
+app/.build/
+app/Cosmo.app/

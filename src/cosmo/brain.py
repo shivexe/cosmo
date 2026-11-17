@@ -3,7 +3,18 @@ import os
 import re
 import sys
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, StreamEvent
+from claude_agent_sdk import (
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ResultMessage,
+    StreamEvent,
+    TaskNotificationMessage,
+    TaskProgressMessage,
+    TaskStartedMessage,
+    TaskUpdatedMessage,
+)
+
+from . import events
 
 CREDENTIALS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL")
 SESSIONS = f"{sys.executable} -m cosmo.sessions"
@@ -43,6 +54,17 @@ def take_sentences(buffer):
             return out, buffer
 
 
+def report_worker(msg):
+    if isinstance(msg, TaskStartedMessage):
+        events.emit("worker_started", {"id": msg.task_id, "title": msg.description})
+    elif isinstance(msg, TaskProgressMessage):
+        events.emit("worker_progress", {"id": msg.task_id, "step": msg.description, "tool": msg.last_tool_name or ""})
+    elif isinstance(msg, TaskNotificationMessage):
+        events.emit("worker_done", {"id": msg.task_id, "status": str(msg.status), "summary": msg.summary})
+    elif isinstance(msg, TaskUpdatedMessage) and msg.status in ("completed", "failed", "killed", "stopped"):
+        events.emit("worker_done", {"id": msg.task_id, "status": str(msg.status), "summary": ""})
+
+
 def text_of(msg):
     delta = msg.event.get("delta") or {} if isinstance(msg, StreamEvent) else {}
     if isinstance(msg, StreamEvent) and msg.event.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
@@ -79,6 +101,7 @@ class ClaudeBrain:
 
     async def _read(self):
         async for msg in self.client.receive_messages():
+            report_worker(msg)
             (self.answers if self.busy else self.extras).put_nowait(msg)
 
     async def _connect(self):

@@ -1,7 +1,8 @@
 import asyncio
+import os
 import time
 
-from . import config, events
+from . import commands, config, events
 from .approvals import Approver
 from .brain import ClaudeBrain
 from .ears import Ears
@@ -9,6 +10,8 @@ from .hotkey import watch
 from .stt import SpeechEngine
 from .tts import Voice
 from .wake import Wake, said_wake_word, strip
+from . import voiceid
+from .voiceid import VoiceID
 
 
 STOP_WORDS = {"stop", "cancel", "quiet", "never mind", "nevermind", "be quiet", "shut up", "enough"}
@@ -19,6 +22,7 @@ class Cosmo:
         self.cfg = config.load()
         self.words = config.path_of(self.cfg, "words_file")
         self.engine = SpeechEngine(self.cfg)
+        self.voice_id = VoiceID(self.cfg["voice_id_threshold"]) if self.cfg["listen_mode"] in ("wake", "always") and voiceid.PROFILE.exists() else None
         self.ears = Ears(self.cfg["end_of_speech_ms"], self.load_wake())
         self.voice = Voice(self.ears)
         self.approver = Approver(self.voice.say, self.hear_answer)
@@ -118,8 +122,10 @@ class Cosmo:
         if not self.always():
             return
         if self.waiting is not None and not self.waiting.done():
+            if time.monotonic() - len(audio) / 16000 < self.ears.last_sound + 0.3:
+                return
             self.armed_at = self.arm_reason = None
-            self.spawn(self.finish_answer(audio))
+            self.spawn(self.finish_answer(audio, check_voice=True))
         elif not self.armed(len(audio) / 16000):
             if self.state == "listening":
                 self.set("idle")
@@ -133,7 +139,7 @@ class Cosmo:
                 gate_in, self.armed_at = self.gate, None
             else:
                 self.armed_at = None
-            turn = self.turn(audio, time.perf_counter(), self.task, self.turn_id, need_word, gate_in, gate_out)
+            turn = self.turn(audio, time.perf_counter(), self.task, self.turn_id, need_word, gate_in, gate_out, check_voice=True)
             self.task = asyncio.create_task(turn)
 
     def voice_busy(self):
@@ -172,7 +178,17 @@ class Cosmo:
             self.waiting = None
             self.settle()
 
-    async def finish_answer(self, audio):
+    async def is_me(self, audio):
+        if self.voice_id is None:
+            return True
+        if await asyncio.to_thread(self.voice_id.is_me, audio):
+            return True
+        events.emit("not_you", "ignored a voice that isn’t yours")
+        return False
+
+    async def finish_answer(self, audio, check_voice=False):
+        if check_voice and not await self.is_me(audio):
+            return
         text = await asyncio.to_thread(self.engine.transcribe, audio, self.words)
         events.emit("heard", text)
         if self.waiting is not None and not self.waiting.done():
@@ -184,13 +200,15 @@ class Cosmo:
             events.emit("first_sound", f"{seconds:.2f}s")
             print(f"  first sound {seconds:.2f}s after you let go")
 
-    async def turn(self, audio, at, previous, mine, need_word=False, gate_in=None, gate_out=None):
+    async def turn(self, audio, at, previous, mine, need_word=False, gate_in=None, gate_out=None, typed=None, check_voice=False):
         brain = None
         self.next_uid += 1
         uid = self.next_uid
         try:
-            text = None
-            if gate_in is None and (self.busy() or (previous and not previous.done())):
+            if check_voice and not await self.is_me(audio):
+                return self.settle()
+            text = typed
+            if text is None and gate_in is None and (self.busy() or (previous and not previous.done())):
                 text = await asyncio.to_thread(self.engine.transcribe, audio, self.words)
                 if (not need_word or said_wake_word(text)) and strip(text).lower().strip(" .,!?") in STOP_WORDS:
                     events.emit("heard", text)
@@ -282,6 +300,7 @@ class Cosmo:
                     self.speakers[uid] = (brain, asyncio.current_task())
                     self.spawn(self.report(at, mine))
                 print(f"  cosmo: {sentence}")
+                events.emit("said", sentence)
                 self.voice.say(sentence)
                 self.settle()
         finally:
@@ -304,6 +323,7 @@ class Cosmo:
             while self.talking() or self.waiting is not None or self.state == "listening":
                 await asyncio.sleep(0.3)
             print(f"  cosmo (on its own): {sentence}")
+            events.emit("said", sentence)
             self.voice.say(sentence)
             self.settle()
             await asyncio.to_thread(self.voice.wait)
@@ -319,10 +339,15 @@ async def run():
     cosmo.ears.on_wake = lambda: loop.call_soon_threadsafe(cosmo.woke)
     watch(cosmo.cfg["hotkey"], asyncio.get_running_loop(), cosmo.pressed, cosmo.released)
     cosmo.spawn(cosmo.announce(cosmo.brain))
+    pid_file = config.HOME / "cosmo.pid"
+    pid_file.write_text(str(os.getpid()))
+    cosmo.spawn(commands.follow(cosmo))
+    cosmo.spawn(commands.snapshot_sessions())
     events.emit("ready")
     how = {"always": "just talk", "wake": "say hey cosmo"}.get(cosmo.cfg["listen_mode"], f"hold {cosmo.cfg['hotkey']} to talk, release to send")
     print(f"ready. {how}; talk over Cosmo or press the key to interrupt. ctrl-c quits.")
     try:
         await asyncio.Event().wait()
     finally:
+        pid_file.unlink(missing_ok=True)
         await cosmo.brain.close()

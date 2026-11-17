@@ -16,6 +16,7 @@ DEFAULTS = {
     "wake_verifier": str(HOME / "wake" / "verifier.pkl"),
     "wake_threshold": 0.5,
     "wake_window_seconds": 8,
+    "voice_id_threshold": 0.25,
     "brain_model": None,
     "speech_engine": "whisper-small-lora",
     "adapter_path": "~/cosmo/lab/finetune/runs/small-r16-e3",

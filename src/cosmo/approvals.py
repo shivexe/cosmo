@@ -5,7 +5,7 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from . import events
 
-YES = {"yes", "yeah", "yep", "yup", "sure", "okay", "ok", "approve", "approved", "allow", "go ahead", "do it", "proceed"}
+YES = {"yes", "yeah", "yep", "yup", "sure", "okay", "ok", "go ahead", "do it", "proceed"}
 NO = {"no", "not", "nope", "nah", "stop", "cancel", "deny", "don't", "do not", "never"}
 TIMEOUT = 30
 MAX_READ = 200
@@ -39,12 +39,16 @@ class Approver:
     async def __call__(self, tool_name, tool_input, context):
         self.lock = self.lock or asyncio.Lock()
         async with self.lock:
-            return await self.ask(tool_name, tool_input)
+            try:
+                return await self.ask(tool_name, tool_input)
+            except asyncio.CancelledError:
+                events.emit("approval", "cancelled")
+                raise
 
     async def ask(self, tool_name, tool_input):
         what = describe(tool_name, tool_input)
         events.emit("waiting_for_approval", what)
-        question = f"Claude wants to {what}. Allow it?"
+        question = f"Should I {what}?"
         for attempt in range(2):
             self.say(question if attempt == 0 else "Say yes or no.")
             try:

@@ -357,7 +357,17 @@ def verifier():
     )
 
 
-STEPS = {"label": label_mine, "speak": speak, "features": features, "train": train, "verifier": verifier, "eval": evaluate}
+def voice():
+    from cosmo.voiceid import VoiceID
+
+    clips = [Path(p) for p, split in wispr_clips().items() if split == "train"][:40]
+    base = load(BASELINE)
+    room = [base[i : i + 4 * RATE] for i in range(0, len(base) - 4 * RATE, 4 * RATE)]
+    count = VoiceID(0.3).enroll([load(p)[: 8 * RATE] for p in clips] + room + his_recorded("train"))
+    print(f"voice: enrolled on {count} clips")
+
+
+STEPS = {"label": label_mine, "voice": voice, "speak": speak, "features": features, "train": train, "verifier": verifier, "eval": evaluate}
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
