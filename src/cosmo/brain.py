@@ -68,6 +68,7 @@ class ClaudeBrain:
         self.cancelled = False
         self.taken = False
         self.holder = None
+        self.asks = 0
         self.busy = False
         self.unsolicited = False
         self.answers = asyncio.Queue()
@@ -93,6 +94,7 @@ class ClaudeBrain:
             await self._connect()
         self.cancelled = False
         self.busy = True
+        self.asks += 1
         finished = sent = False
         try:
             await self.client.query(text)
@@ -138,7 +140,9 @@ class ClaudeBrain:
                 for s in sentences:
                     yield s
 
-    async def interrupt(self):
+    async def interrupt(self, only_ask=None):
+        if only_ask is not None and only_ask != self.asks:
+            return
         self.cancelled = True
         if self.connected:
             await self.client.interrupt()

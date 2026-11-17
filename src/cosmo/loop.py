@@ -45,6 +45,8 @@ class Cosmo:
         return task
 
     def set(self, state, detail=""):
+        if self.waiting is not None and not self.waiting.done() and state != "waiting_for_approval":
+            return
         self.state = state
         events.emit(state, detail)
 
@@ -53,7 +55,7 @@ class Cosmo:
             self.voice.stop()
             self.mode = "answer"
         else:
-            if self.voice_busy():
+            if self.talking():
                 self.talk_over()
             self.mode = "turn"
             self.set("listening")
@@ -138,6 +140,9 @@ class Cosmo:
     def voice_busy(self):
         return self.voice.pending > 0
 
+    def talking(self):
+        return bool(self.speakers) or self.voice_busy()
+
     def alive(self, epoch, uid):
         return epoch == self.turn_id and uid not in self.cancelled_turns
 
@@ -146,7 +151,7 @@ class Cosmo:
         for uid, (brain, task) in list(self.speakers.items()):
             self.cancelled_turns.add(uid)
             if brain.holder is task and (brain.busy or brain.taken):
-                self.spawn(brain.interrupt())
+                self.spawn(brain.interrupt(brain.asks))
         self.speakers.clear()
         events.emit("talked_over")
 
@@ -305,7 +310,7 @@ class Cosmo:
 
     async def announce(self, brain):
         async for sentence in brain.announcements():
-            while self.voice_busy() or self.state in ("listening", "waiting_for_approval"):
+            while self.talking() or self.waiting is not None or self.state == "listening":
                 await asyncio.sleep(0.3)
             print(f"  cosmo (on its own): {sentence}")
             self.voice.say(sentence)
