@@ -27,7 +27,7 @@ class Cosmo:
         self.last_brain = None
         self.next_uid = 0
         self.cancelled_turns = set()
-        self.speaker = None
+        self.speakers = {}
         self.state = "idle"
         self.turn_id = 0
         self.task = None
@@ -143,17 +143,16 @@ class Cosmo:
 
     def talk_over(self):
         self.voice.stop()
-        if self.speaker is not None:
-            uid, brain = self.speaker
+        for uid, (brain, task) in list(self.speakers.items()):
             self.cancelled_turns.add(uid)
-            if brain.busy or brain.taken:
+            if brain.holder is task and (brain.busy or brain.taken):
                 self.spawn(brain.interrupt())
-            self.speaker = None
+        self.speakers.clear()
         events.emit("talked_over")
 
     def interrupt(self):
         self.turn_id += 1
-        self.speaker = None
+        self.speakers.clear()
         self.voice.stop()
         for brain in (self.brain, self.helper):
             if brain is not None and (brain.busy or brain.taken):
@@ -217,6 +216,8 @@ class Cosmo:
                 gate_out.set_result(False)
             self.end_pending(gate_out)
             self.release(brain)
+            self.speakers.pop(uid, None)
+            self.cancelled_turns.discard(uid)
 
     def end_pending(self, gate):
         if gate is not None and self.gate is gate and self.arm_reason == "pending":
@@ -282,23 +283,24 @@ class Cosmo:
                     continue
                 if not spoke:
                     spoke = True
-                    self.speaker = (uid, brain)
-                    self.set("speaking")
+                    self.speakers[uid] = (brain, asyncio.current_task())
                     self.spawn(self.report(at, mine))
                 print(f"  cosmo: {sentence}")
                 self.voice.say(sentence)
+                self.settle()
         finally:
             await stream.aclose()
             self.release(brain)
         if self.alive(mine, uid):
             if spoke:
                 await asyncio.to_thread(self.voice.wait)
-            if self.speaker is not None and self.speaker[0] == uid:
-                self.speaker = None
+            self.speakers.pop(uid, None)
             if self.alive(mine, uid):
                 self.settle()
 
     def settle(self):
+        if self.waiting is not None and not self.waiting.done():
+            return
         self.set("speaking" if self.voice_busy() else "thinking" if self.busy() else "idle")
 
     async def announce(self, brain):
@@ -306,10 +308,11 @@ class Cosmo:
             while self.voice_busy() or self.state in ("listening", "waiting_for_approval"):
                 await asyncio.sleep(0.3)
             print(f"  cosmo (on its own): {sentence}")
-            self.set("speaking")
             self.voice.say(sentence)
-            await asyncio.to_thread(self.voice.wait)
             self.settle()
+            await asyncio.to_thread(self.voice.wait)
+            if self.state == "speaking":
+                self.settle()
 
 
 async def run():
